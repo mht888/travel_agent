@@ -172,6 +172,21 @@ def _normalize_style(value: str | None) -> TravelStyle | None:
     return _STYLE_ALIASES.get(value.strip().lower())
 
 
+def _normalize_destination(value: str | None) -> str | None:
+    """把用户/LLM 输出的城市名归一化到 mock 数据用的英文名。
+
+    mock 数据里城市字段是 "Tokyo" / "Osaka" 等英文名；LLM 可能输出 "东京"。
+    用 _CITY_ALIASES 做一次映射，避免下游 search_attractions 匹配不到。
+    映射表外的城市原样返回（后续接真实 API 时不限制）。
+    """
+    if value is None:
+        return None
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    return _CITY_ALIASES.get(cleaned.lower(), cleaned)
+
+
 # ---------------------------- LLM 抽取 ----------------------------
 
 
@@ -249,7 +264,7 @@ def _to_patch(raw: _LLMExtraction) -> tuple[RequirementPatch, list[str]]:
     data: dict[str, Any] = {}
 
     if raw.destination and raw.destination.strip():
-        data["destination"] = raw.destination.strip()
+        data["destination"] = _normalize_destination(raw.destination)
 
     if raw.duration_days is not None:
         if 1 <= raw.duration_days <= 30:
@@ -308,6 +323,26 @@ def _to_patch(raw: _LLMExtraction) -> tuple[RequirementPatch, list[str]]:
         return RequirementPatch(), warnings + ["抽取结果未通过校验，已忽略本次增量"]
 
 
+def _is_empty_extraction(raw: _LLMExtraction) -> bool:
+    """判断 LLM 返回的结构化结果是否等于「什么都没抽到」。
+
+    背景：DeepSeek 等兼容端点调用 completions.parse(response_format=Model) 时，
+    可能不抛异常但返回所有字段为 None / 空列表的空对象。此时不能把它当成
+    「LLM 成功抽取了空需求」，而应该降级到 json mode 或规则解析。
+    """
+    return (
+        not raw.destination
+        and raw.duration_days is None
+        and not raw.start_date
+        and raw.travelers is None
+        and raw.budget_amount is None
+        and not raw.budget_currency
+        and not raw.interests
+        and not raw.travel_style
+        and not raw.notes
+    )
+
+
 class RequirementAgent:
     """LLM 抽取器。任何异常都降级到规则解析，保证流程不被外部 API 阻塞。"""
 
@@ -339,27 +374,47 @@ class RequirementAgent:
         ]
 
         # 第一优先：json_schema 严格结构化输出（OpenAI 官方模型支持）
+        raw: _LLMExtraction | None = None
+        structured_exc: Exception | None = None
+        json_exc: Exception | None = None
+
         try:
-            raw = await self._structured_output(messages)
-        except Exception as structured_exc:  # noqa: BLE001 - 兼容性探测，失败继续尝试
-            logger.info("json_schema 输出不可用，改用 JSON mode: %s", structured_exc)
+            candidate = await self._structured_output(messages)
+            # 兼容端点可能返回空对象而不报错，视为失败，继续降级
+            if not _is_empty_extraction(candidate):
+                raw = candidate
+        except Exception as exc:  # noqa: BLE001 - 兼容性探测，失败继续尝试
+            structured_exc = exc
+            logger.info("json_schema 输出不可用，改用 JSON mode: %s", exc)
+
+        # 第二优先：json_object + Pydantic 校验（DeepSeek 等兼容端点）
+        if raw is None:
             try:
-                # 第二优先：json_object + Pydantic 校验（DeepSeek 等兼容端点）
-                raw = await self._json_mode_output(messages)
-            except Exception as json_exc:  # noqa: BLE001 - 外部 API 失败必须降级
-                logger.warning("LLM 需求抽取失败，降级为规则解析: %s", json_exc)
-                fallback_outcome = await self._fallback.extract(
-                    message, previous=previous, today=current_day
-                )
-                return ExtractionOutcome(
-                    patch=fallback_outcome.patch,
-                    warnings=[
-                        "LLM 抽取失败，已降级为规则解析："
-                        f"{type(structured_exc).__name__} / {type(json_exc).__name__}",
-                        *fallback_outcome.warnings,
-                    ],
-                    source="rules",
-                )
+                candidate = await self._json_mode_output(messages)
+                if not _is_empty_extraction(candidate):
+                    raw = candidate
+            except Exception as exc:  # noqa: BLE001 - 外部 API 失败必须降级
+                json_exc = exc
+                logger.info("JSON mode 抽取失败或为空，降级为规则解析: %s", exc)
+
+        # 第三优先：规则解析
+        if raw is None:
+            logger.warning("LLM 需求抽取未返回有效结果，降级为规则解析")
+            fallback_outcome = await self._fallback.extract(
+                message, previous=previous, today=current_day
+            )
+            exc_names = " / ".join(
+                type(e).__name__ for e in (structured_exc, json_exc) if e is not None
+            )
+            return ExtractionOutcome(
+                patch=fallback_outcome.patch,
+                warnings=[
+                    f"LLM 抽取未返回有效结果，已降级为规则解析"
+                    + (f"（{exc_names}）" if exc_names else ""),
+                    *fallback_outcome.warnings,
+                ],
+                source="rules",
+            )
 
         patch, warnings = _to_patch(raw)
         return ExtractionOutcome(patch=patch, warnings=warnings, source="llm")

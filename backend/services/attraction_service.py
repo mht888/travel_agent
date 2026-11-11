@@ -61,6 +61,17 @@ class AttractionService:
             items=items,
         )
 
+    async def get_detail(self, attraction_id: str) -> Attraction | None:
+        """按 id 取详情。id 非法抛 ValueError，查不到返回 None。
+
+        这里只包装 Provider：详情字段（开放时间、票价、坐标）在 Provider 层
+        已经统一成 Attraction，Service 不需要二次加工。
+        """
+        normalized = attraction_id.strip()
+        if not normalized:
+            raise ValueError("attraction_id 不能为空白")
+        return await self._provider.get_attraction(normalized)
+
     @staticmethod
     def _normalize_interests(interests: Sequence[str] | None) -> list[str]:
         """去空白、转小写、去重，保持用户输入顺序（便于回显和测试断言）。"""

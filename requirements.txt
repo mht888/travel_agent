@@ -19,13 +19,19 @@ httpx>=0.27,<1.0
 # LLM（第 4 阶段：需求提取，使用 Pydantic 结构化输出）
 openai>=2.0,<3.0
 
+# 第 5 阶段：Tool 定义
+langchain-core>=0.3,<2.0
+
+# 第 6 阶段：LangGraph 工作流 + OpenAI Chat 模型（bind_tools）
+langgraph>=0.2,<1.0
+langchain-openai>=0.2,<1.0
+
 # 测试
 pytest>=8.3,<9.0
 
 # ------------------------------------------------------------
 # 后续阶段再取消注释，不要提前安装：
 # 主流程跑通后再接数据库：SQLAlchemy>=2.0 / psycopg[binary]>=3.2 / alembic>=1.13
-# 第 6 阶段：langgraph>=0.2 / langchain-core>=0.3
 # 第 10 阶段：ortools>=9.10
 # 第 11 阶段：langsmith>=0.1
 # ------------------------------------------------------------

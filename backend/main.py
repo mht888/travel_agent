@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 
 from backend.api.health import router as health_router
 from backend.api.trip import requirements_router
+from backend.api.trip import research_router
 from backend.api.trip import router as trip_router
 from backend.config import get_settings
 from backend.errors import TravelAgentError
@@ -43,6 +44,7 @@ def create_app() -> FastAPI:
     app.include_router(health_router, prefix=settings.api_prefix)
     app.include_router(trip_router, prefix=settings.api_prefix)
     app.include_router(requirements_router, prefix=settings.api_prefix)
+    app.include_router(research_router, prefix=settings.api_prefix)
 
     @app.exception_handler(TravelAgentError)
     async def handle_travel_agent_error(

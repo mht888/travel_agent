@@ -36,3 +36,6 @@ logs/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# ===== 汇率数据文件 =====
+.data/

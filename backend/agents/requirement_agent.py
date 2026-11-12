@@ -22,10 +22,11 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, InvalidOperation
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, get_args, get_origin
 
 from pydantic import BaseModel, Field, ValidationError
 
+from backend.schemas.attraction import AttractionCategory
 from backend.schemas.common import ALLOWED_CURRENCIES
 from backend.schemas.requirement import RequirementPatch, TripRequirementDraft
 from backend.schemas.trip import TravelStyle
@@ -60,81 +61,7 @@ class RequirementExtractor(Protocol):
 
 # ---------------------------- 字段归一化 ----------------------------
 
-_CURRENCY_ALIASES: dict[str, str] = {
-    "usd": "USD",
-    "dollar": "USD",
-    "dollars": "USD",
-    "美元": "USD",
-    "美金": "USD",
-    "jpy": "JPY",
-    "yen": "JPY",
-    "日元": "JPY",
-    "cny": "CNY",
-    "rmb": "CNY",
-    "yuan": "CNY",
-    "人民币": "CNY",
-    "元": "CNY",
-    "eur": "EUR",
-    "euro": "EUR",
-    "euros": "EUR",
-    "欧元": "EUR",
-}
 
-# 用户口语 → 与 AttractionCategory / 景点 tags 对齐的标签
-_INTEREST_ALIASES: dict[str, str] = {
-    "美食": "food",
-    "吃": "food",
-    "餐厅": "food",
-    "food": "food",
-    "购物": "shopping",
-    "shopping": "shopping",
-    "文化": "culture",
-    "历史": "culture",
-    "寺庙": "culture",
-    "神社": "culture",
-    "博物馆": "culture",
-    "culture": "culture",
-    "自然": "nature",
-    "公园": "nature",
-    "风景": "nature",
-    "nature": "nature",
-    "夜生活": "nightlife",
-    "酒吧": "nightlife",
-    "nightlife": "nightlife",
-}
-
-_STYLE_ALIASES: dict[str, TravelStyle] = {
-    "relaxed": TravelStyle.RELAXED,
-    "悠闲": TravelStyle.RELAXED,
-    "轻松": TravelStyle.RELAXED,
-    "放松": TravelStyle.RELAXED,
-    "balanced": TravelStyle.BALANCED,
-    "适中": TravelStyle.BALANCED,
-    "intensive": TravelStyle.INTENSIVE,
-    "紧凑": TravelStyle.INTENSIVE,
-    "高强度": TravelStyle.INTENSIVE,
-}
-
-_CITY_ALIASES: dict[str, str] = {
-    "东京": "Tokyo",
-    "tokyo": "Tokyo",
-    "大阪": "Osaka",
-    "osaka": "Osaka",
-    "京都": "Kyoto",
-    "kyoto": "Kyoto",
-    "首尔": "Seoul",
-    "seoul": "Seoul",
-    "曼谷": "Bangkok",
-    "bangkok": "Bangkok",
-    "新加坡": "Singapore",
-    "singapore": "Singapore",
-    "巴黎": "Paris",
-    "paris": "Paris",
-    "伦敦": "London",
-    "london": "London",
-    "纽约": "New York",
-    "new york": "New York",
-}
 
 
 def _normalize_currency(value: str | None) -> str | None:
@@ -146,7 +73,7 @@ def _normalize_currency(value: str | None) -> str | None:
         return None
     if len(cleaned) == 3 and cleaned.upper() in ALLOWED_CURRENCIES:
         return cleaned.upper()
-    return _CURRENCY_ALIASES.get(cleaned.lower())
+    return None
 
 
 def _normalize_interests(values: Sequence[str] | None) -> list[str]:
@@ -159,7 +86,7 @@ def _normalize_interests(values: Sequence[str] | None) -> list[str]:
         clean = value.strip().lower()
         if not clean:
             continue
-        canonical = _INTEREST_ALIASES.get(clean, clean)
+        canonical = clean
         if canonical not in seen:
             seen.add(canonical)
             normalized.append(canonical)
@@ -169,64 +96,183 @@ def _normalize_interests(values: Sequence[str] | None) -> list[str]:
 def _normalize_style(value: str | None) -> TravelStyle | None:
     if value is None:
         return None
-    return _STYLE_ALIASES.get(value.strip().lower())
+    try:
+        return TravelStyle(value.strip().lower())
+    except ValueError:
+        return None
 
 
 def _normalize_destination(value: str | None) -> str | None:
-    """把用户/LLM 输出的城市名归一化到 mock 数据用的英文名。
-
-    mock 数据里城市字段是 "Tokyo" / "Osaka" 等英文名；LLM 可能输出 "东京"。
-    用 _CITY_ALIASES 做一次映射，避免下游 search_attractions 匹配不到。
-    映射表外的城市原样返回（后续接真实 API 时不限制）。
-    """
+    """城市名只做去空白；提示词已要求 LLM 输出英文名。"""
     if value is None:
         return None
     cleaned = value.strip()
-    if not cleaned:
-        return None
-    return _CITY_ALIASES.get(cleaned.lower(), cleaned)
+    return cleaned or None
+
+
+# ---------------------------- 提示词字段说明（由 schema 生成） ----------------------------
+# 提示词里的「字段 + 可填值」直接从 schema 取值：
+#   字段名与顺序 → _LLMExtraction 的字段定义
+#   兴趣取值     → AttractionCategory
+#   节奏取值     → TravelStyle
+#   币种取值     → ALLOWED_CURRENCIES
+#   数值范围     → RequirementPatch 的 Field 校验约束
+# 新增字段或调整取值范围时只改 schema，提示词和结构化输出 schema 自动同步。
+
+_STYLE_EXTRA_HINTS: dict[TravelStyle, tuple[str, ...]] = {
+    TravelStyle.RELAXED: ("不想太累", "不赶时间", "慢慢逛"),
+    TravelStyle.BALANCED: (),
+    TravelStyle.INTENSIVE: ("赶行程", "多打卡"),
+}
+
+
+def _field_bounds(field_name: str) -> tuple[int | None, int | None]:
+    """从 RequirementPatch 的校验约束里取上下限，避免提示词和校验规则各写一份。"""
+    metadata = RequirementPatch.model_fields[field_name].metadata
+    lower = next((item.ge for item in metadata if getattr(item, "ge", None) is not None), None)
+    upper = next((item.le for item in metadata if getattr(item, "le", None) is not None), None)
+    return lower, upper
+
+
+def _interests_hint() -> str:
+    """兴趣取值来自 AttractionCategory，排除兜底用的 other。"""
+    return " / ".join(
+        category.value
+        for category in AttractionCategory
+        if category is not AttractionCategory.OTHER
+    )
+
+
+def _styles_hint() -> str:
+    parts: list[str] = []
+    for style in TravelStyle:
+        extra = _STYLE_EXTRA_HINTS.get(style, ())
+        parts.append(f"{style.value}（{'、'.join(extra)}）" if extra else style.value)
+    return " / ".join(parts)
+
+
+_DURATION_MIN, _DURATION_MAX = _field_bounds("duration_days")
+_TRAVELERS_MIN, _TRAVELERS_MAX = _field_bounds("travelers")
 
 
 # ---------------------------- LLM 抽取 ----------------------------
 
 
 class _LLMExtraction(BaseModel):
-    """给 OpenAI 结构化输出用的扁平原型。所有字段都可空，None 表示没提到。"""
+    """给 OpenAI 结构化输出用的扁平原型。所有字段都可空，None 表示没提到。
 
-    destination: str | None = None
-    duration_days: int | None = None
-    start_date: str | None = Field(None, description="ISO 8601 日期，如 2026-04-01")
-    travelers: int | None = None
-    budget_amount: float | None = None
-    budget_currency: str | None = None
-    interests: list[str] = Field(default_factory=list)
-    travel_style: str | None = None
-    notes: str | None = None
+    每个字段的 description 同时用于结构化输出 schema 和下面的提示词，
+    字段说明只维护这一份。
+    """
+
+    destination: str | None = Field(
+        None,
+        description="城市名，用英文名（如 Tokyo、Osaka、Kyoto）。只提到国家、没说城市时输出 null。",
+    )
+    duration_days: int | None = Field(
+        None,
+        description=(
+            f"整数 {_DURATION_MIN}~{_DURATION_MAX}，单位天。"
+            "“玩 5 天”“5 天的行程”→ 5。"
+        ),
+    )
+    start_date: str | None = Field(
+        None,
+        description=(
+            "YYYY-MM-DD。“下个月”“下周五”这类相对日期，按给定的今天日期换算；"
+            "无法可靠换算时输出 null。"
+        ),
+    )
+    travelers: int | None = Field(
+        None,
+        description=(
+            f"整数 {_TRAVELERS_MIN}~{_TRAVELERS_MAX}，出行人数。"
+            "“我们 4 个人”→ 4；“1000 人民币”里的“人”不是人数。"
+        ),
+    )
+    budget_amount: float | None = Field(
+        None,
+        description="只填数字，不要带币种符号或千分位。“预算 1 万”→ 10000，“1.5 千”→ 1500。",
+    )
+    budget_currency: str | None = Field(
+        None,
+        description=(
+            f"只能是 {' / '.join(sorted(ALLOWED_CURRENCIES))}。"
+            "美元/美金→USD，日元→JPY，人民币/元/块→CNY，欧元→EUR。"
+            "用户没说币种时输出 null，不要猜。"
+        ),
+    )
+    interests: list[str] = Field(
+        default_factory=list,
+        description=f"判断用户的兴趣满足这个标签列表中的哪些标签,只能从这些标签中选，尽量准确，可多选：{_interests_hint()}。",
+    )
+    travel_style: str | None = Field(
+        None,
+        description=f"只能是 {_styles_hint()}。",
+    )
+    notes: str | None = Field(
+        None,
+        description="无法结构化的补充要求（如“不吃生食”“带老人小孩”），不要重复上面的字段。",
+    )
 
 
-_SYSTEM_PROMPT = """你是旅行需求抽取器。把用户的话转换成结构化字段，不要编造用户没说的信息。
+def _render_field_specs() -> str:
+    """按 _LLMExtraction 的字段顺序渲染提示词里的字段清单。"""
+    return "\n".join(
+        f"- {name}：{info.description}"
+        for name, info in _LLMExtraction.model_fields.items()
+    )
 
-规则：
-1. 只抽取用户明确表达、或结合上下文可以直接推断的信息；拿不准的字段输出 null。
-2. start_date 使用 ISO 格式 YYYY-MM-DD。用户说“下个月”“下周五”这类相对日期时，
-   结合给定的今天日期换算；无法可靠换算时输出 null。
-3. interests 只能从 food / shopping / culture / nature / nightlife 中选，可多选。
-4. travel_style 只能是 relaxed（悠闲、不要太紧凑）、balanced（适中）、intensive（紧凑、高强度）。
-5. budget_currency 用 ISO 三字母代码：美元→USD，日元→JPY，人民币→CNY，欧元→EUR。
-   用户没说币种时输出 null。
-6. notes 只放无法结构化的补充要求（如“不吃生食”），不要重复已有字段。
-7. 如果用户在修改已有需求（如“预算改成 1500”），只输出被修改的字段，其余输出 null。
 
-输出格式：只输出一个 JSON 对象，不要 markdown 代码块，不要解释。字段如下（全部必填，未知用 null）：
-destination: 城市名或 null
-duration_days: 整数天数或 null
-start_date: YYYY-MM-DD 或 null
-travelers: 整数或 null
-budget_amount: 数字或 null
-budget_currency: USD/JPY/CNY/EUR 或 null
-interests: 标签数组（可为空数组）
-travel_style: relaxed/balanced/intensive 或 null
-notes: 字符串或 null
+def _render_output_skeleton() -> str:
+    """按 _LLMExtraction 的字段生成 JSON 模板，输出格式不再手写一份字段清单。"""
+    body = ",\n".join(
+        f'  "{name}": {"[]" if get_origin(info.annotation) is list else "null"}'
+        for name, info in _LLMExtraction.model_fields.items()
+    )
+    return "{\n" + body + "\n}"
+
+
+def _render_output_types() -> str:
+    """字段名 + JSON 类型，帮助模型对齐 JSON 里每个值该写什么。"""
+    labels = {str: "string", int: "integer", float: "number"}
+    lines: list[str] = []
+    for name, info in _LLMExtraction.model_fields.items():
+        if get_origin(info.annotation) is list:
+            label = "array"
+        else:
+            base = next(
+                (arg for arg in get_args(info.annotation) if arg is not type(None)),
+                info.annotation,
+            )
+            label = labels.get(base, "string")
+        lines.append(f"{name}: {label}")
+    return "\n".join(lines)
+
+
+_SYSTEM_PROMPT = f"""你是专业的旅行需求抽取专家。任务：判断用户本轮这句话提到了哪些字段，并把内容映射成下面规定的可填值。
+
+【字段与可填内容】
+{_render_field_specs()}
+
+【判断规则】
+1. 只输出用户本轮明确提到的字段。没提到的字段一律输出 null,interests 输出 []。
+2. 不要用常识补全，不要编造用户没说的信息；拿不准就输出 null。
+3. 用户的话只要能对应到上面的可填值，就必须映射成规定取值，不要照抄原话。例如：
+   - “旅游不想太累，不赶时间”→ travel_style = relaxed
+   - “想多吃点当地小吃”→ interests = ["food"]
+   - “预算大概一万块人民币”→ budget_amount = 10000,budget_currency = CNY
+   - “我们一家四口”→ travelers = 4
+4. 用户在修改已有需求（如“预算改成 1500”）时，只输出被修改的字段，其余输出 null。
+5. “不想要 X”这类否定表达不算喜欢 X：例如“不想购物”→ interests 不填 shopping。
+
+【输出格式】
+只输出一个 JSON 对象，不要 markdown 代码块，不要解释。必须包含下面全部字段，不能省略；
+未提到的字段填 null，interests 填 []。字段与类型：
+{_render_output_types()}
+
+JSON 结构：
+{_render_output_skeleton()}
 """
 
 
@@ -293,9 +339,9 @@ def _to_patch(raw: _LLMExtraction) -> tuple[RequirementPatch, list[str]]:
             data["budget_amount"] = amount.quantize(Decimal("0.01"))
             currency = _normalize_currency(raw.budget_currency)
             if currency is None:
-                # 不静默猜测：金额保留下来，但把「按 USD 处理」写进 warnings
-                data["budget_currency"] = "USD"
-                warnings.append("预算未说明币种，已按 USD 处理")
+                # 不静默猜测：金额保留下来，但把「按 CNY 处理」写进 warnings
+                data["budget_currency"] = "CNY"
+                warnings.append("预算未说明币种，已按 CNY 处理")
             else:
                 data["budget_currency"] = currency
         else:
@@ -457,7 +503,8 @@ class RequirementAgent:
 
 _DURATION_PATTERN = re.compile(r"(\d+)\s*(?:天|日|days?|nights?)", re.IGNORECASE)
 _TRAVELERS_PATTERN = re.compile(
-    r"(\d+)\s*(?:人|位|个人|travelers?|people|persons?)", re.IGNORECASE
+    # 「1000 人民币」里的「人」不是人数，必须排除，否则 1000 会被当成 travelers
+    r"(\d+)\s*(?:人(?!民币)|位|个人|travelers?|people|persons?)", re.IGNORECASE
 )
 _BUDGET_PATTERN = re.compile(
     r"(?:预算|budget|花费|控制在)[^\d]{0,8}"
@@ -471,6 +518,79 @@ _BUDGET_WITH_CURRENCY_PATTERN = re.compile(
 )
 _FULL_DATE_PATTERN = re.compile(r"(\d{4})\s*[-/年]\s*(\d{1,2})\s*[-/月]\s*(\d{1,2})\s*日?")
 _MONTH_DAY_PATTERN = re.compile(r"(\d{1,2})\s*月\s*(\d{1,2})\s*日")
+
+# 规则兜底专用的中文关键词表。提示词取值来自 schema，这些表只服务正则解析。
+_RULE_CURRENCY_ALIASES: dict[str, str] = {
+    "usd": "USD",
+    "dollar": "USD",
+    "dollars": "USD",
+    "美元": "USD",
+    "美金": "USD",
+    "jpy": "JPY",
+    "yen": "JPY",
+    "日元": "JPY",
+    "cny": "CNY",
+    "rmb": "CNY",
+    "yuan": "CNY",
+    "人民币": "CNY",
+    "元": "CNY",
+    "eur": "EUR",
+    "euro": "EUR",
+    "euros": "EUR",
+    "欧元": "EUR",
+}
+
+_RULE_INTEREST_KEYWORDS: dict[str, str] = {
+    "美食": "food",
+    "吃": "food",
+    "餐厅": "food",
+    "food": "food",
+    "购物": "shopping",
+    "shopping": "shopping",
+    "文化": "culture",
+    "历史": "culture",
+    "寺庙": "culture",
+    "神社": "culture",
+    "博物馆": "culture",
+    "culture": "culture",
+    "自然": "nature",
+    "公园": "nature",
+    "风景": "nature",
+    "nature": "nature",
+    "夜生活": "nightlife",
+    "酒吧": "nightlife",
+    "nightlife": "nightlife",
+}
+
+_RULE_CITY_ALIASES: dict[str, str] = {
+    "东京": "Tokyo",
+    "tokyo": "Tokyo",
+    "大阪": "Osaka",
+    "osaka": "Osaka",
+    "京都": "Kyoto",
+    "kyoto": "Kyoto",
+    "首尔": "Seoul",
+    "seoul": "Seoul",
+    "曼谷": "Bangkok",
+    "bangkok": "Bangkok",
+    "新加坡": "Singapore",
+    "singapore": "Singapore",
+    "巴黎": "Paris",
+    "paris": "Paris",
+    "伦敦": "London",
+    "london": "London",
+    "纽约": "New York",
+    "new york": "New York",
+}
+
+
+def _rule_currency(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip().lower()
+    if len(cleaned) == 3 and cleaned.upper() in ALLOWED_CURRENCIES:
+        return cleaned.upper()
+    return _RULE_CURRENCY_ALIASES.get(cleaned)
 
 
 def _mask(text: str, start: int, end: int) -> str:
@@ -509,10 +629,10 @@ class RuleBasedRequirementExtractor:
 
         if match := _BUDGET_PATTERN.search(text):
             data["budget_amount"] = Decimal(match.group(1))
-            currency = _normalize_currency(match.group(2))
+            currency = _rule_currency(match.group(2))
         elif match := _BUDGET_WITH_CURRENCY_PATTERN.search(text):
             data["budget_amount"] = Decimal(match.group(1))
-            currency = _normalize_currency(match.group(2))
+            currency = _rule_currency(match.group(2))
         else:
             currency = None
             match = None
@@ -589,7 +709,7 @@ class RuleBasedRequirementExtractor:
     def _extract_interests(lowered: str) -> list[str]:
         # 按关键词首次出现的位置排序，保持用户表达顺序
         hits: list[tuple[int, str]] = []
-        for keyword, canonical in _INTEREST_ALIASES.items():
+        for keyword, canonical in _RULE_INTEREST_KEYWORDS.items():
             index = lowered.find(keyword)
             if index >= 0:
                 hits.append((index, canonical))
@@ -605,7 +725,7 @@ class RuleBasedRequirementExtractor:
     @staticmethod
     def _extract_destination(lowered: str) -> str | None:
         best: tuple[int, str] | None = None
-        for alias, city in _CITY_ALIASES.items():
+        for alias, city in _RULE_CITY_ALIASES.items():
             index = lowered.find(alias)
             if index >= 0 and (best is None or index < best[0]):
                 best = (index, city)

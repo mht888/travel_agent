@@ -8,6 +8,7 @@ from enum import Enum
 
 from pydantic import BaseModel, Field, model_validator
 
+from backend.schemas.budget import BudgetBreakdown
 from backend.schemas.common import DataStatus, Money, Provenance, TransportMode
 from backend.schemas.trip import TripRequirements
 
@@ -74,6 +75,7 @@ class ItineraryItem(BaseModel):
 class ItineraryDay(BaseModel):
     day_index: int = Field(..., ge=1)
     date: Date | None = None
+    theme: str | None = Field(None, description="当天主题，由 Planner 生成，可为空")
     items: list[ItineraryItem] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -118,7 +120,9 @@ class Itinerary(BaseModel):
 
     trip: TripRequirements
     days: list[ItineraryDay] = Field(default_factory=list)
-    total_cost: Money | None = None
+    budget: BudgetBreakdown | None = Field(
+        None, description="六类费用账本；第 8 阶段由 BudgetService 填充"
+    )
     warnings: list[str] = Field(default_factory=list)
     unresolved_issues: list[str] = Field(
         default_factory=list,

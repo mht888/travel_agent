@@ -10,6 +10,7 @@ from datetime import date
 
 from backend.schemas.attraction import Attraction
 from backend.schemas.common import TransportMode
+from backend.schemas.restaurant import Restaurant
 from backend.schemas.route import RouteMatrixEntry
 from backend.schemas.weather import DailyWeather
 
@@ -44,18 +45,25 @@ class AttractionProvider(ABC):
 class RestaurantProvider(ABC):
     """餐厅数据源。
 
-    第一版按需求「作为景点搜索的扩展」实现，接口先占位，
-    第 5 阶段再决定是否真的接入独立 Provider。
+    实现方只负责「取数 + 转换」，不做排序——那是 RestaurantService 的职责。
+    返回结构用独立的 Restaurant，而不是复用 Attraction：
+    餐厅关心菜系和人均消费，景点关心游玩时长和门票，混用会让预算拆分失真。
     """
 
     @abstractmethod
     async def search_restaurants(
         self,
         city: str,
-        cuisine: str | None = None,
+        cuisines: Sequence[str] | None = None,
         limit: int = 20,
-    ) -> list[Attraction]:
-        """按城市 / 菜系检索餐厅。返回结构复用 Attraction（category=food）。"""
+    ) -> list[Restaurant]:
+        """按城市 / 菜系检索餐厅。
+
+        约定：
+        - 城市大小写不敏感
+        - cuisines 为 None/空 表示不过滤
+        - 返回空列表表示「查到了但没有匹配」，不要抛异常
+        """
 
 
 class RouteProvider(ABC):

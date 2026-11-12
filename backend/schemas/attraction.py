@@ -24,7 +24,12 @@ class AttractionCategory(str, Enum):
     FOOD = "food"
     SHOPPING = "shopping"
     NATURE = "nature"
+    OUTDOOR_ACTIVITY = "outdoor_activity"
     NIGHTLIFE = "nightlife"
+    ENTERTAINMENT = "entertainment"
+    LANDMARKS = "landmark"
+    WELLNESS = "wellness"
+    ART = "art"
     OTHER = "other"
 
 

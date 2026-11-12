@@ -1,6 +1,7 @@
 """旅行相关的 HTTP 接口。
 
-第 4 阶段新增 /trips/requirements；第 6 阶段新增 /trips/research；第 11 阶段加 /trips/plan。
+第 4 阶段新增 /trips/requirements；第 6 阶段新增 /trips/research；
+第 7 阶段新增 /trips/plan（生成每日行程）。
 """
 
 from typing import Annotated
@@ -10,17 +11,23 @@ from pydantic import BaseModel, Field
 
 from backend.graph.workflow import run_research
 from backend.schemas.attraction import AttractionSearchResponse
+from backend.schemas.itinerary import Itinerary
 from backend.schemas.requirement import RequirementExtraction, RequirementExtractionRequest
+from backend.schemas.restaurant import RestaurantSearchResponse
 from backend.schemas.trip import TripRequirements
 from backend.services.attraction_service import AttractionService, get_attraction_service
+from backend.services.itinerary_service import ItineraryService, get_itinerary_service
 from backend.services.requirement_service import (
     RequirementService,
     get_requirement_service,
 )
+from backend.services.restaurant_service import RestaurantService, get_restaurant_service
 
 router = APIRouter(prefix="/attractions", tags=["attractions"])
+restaurant_router = APIRouter(prefix="/restaurants", tags=["restaurants"])
 requirements_router = APIRouter(prefix="/trips", tags=["requirements"])
 research_router = APIRouter(prefix="/trips", tags=["research"])
+plan_router = APIRouter(prefix="/trips", tags=["planner"])
 
 
 class ResearchResponse(BaseModel):
@@ -75,6 +82,41 @@ async def search_attractions(
         )
 
     return await service.search(city=city_name, interests=interests, limit=limit)
+
+
+@restaurant_router.get(
+    "/search",
+    response_model=RestaurantSearchResponse,
+    summary="按城市和菜系搜索餐厅（不暴露给 LLM，只供行程/前端使用）",
+)
+async def search_restaurants(
+    city: Annotated[str, Query(min_length=1, description="城市英文名，如 Tokyo")],
+    cuisines: Annotated[
+        list[str] | None,
+        Query(description="菜系过滤，可重复：?cuisines=ramen&cuisines=sushi"),
+    ] = None,
+    limit: Annotated[int, Query(ge=1, le=30, description="返回条数上限")] = 10,
+    service: RestaurantService = Depends(get_restaurant_service),
+) -> RestaurantSearchResponse:
+    """搜索餐厅候选。
+
+    排序规则：菜系命中数 → 评分 → id。
+    城市没有收录时返回 200 + 空 items，与景点搜索的约定一致。
+    """
+    city_name = city.strip()
+    if not city_name:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="city 不能为空白",
+        )
+
+    try:
+        return await service.search(city=city_name, cuisines=cuisines, limit=limit)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
 
 
 @requirements_router.post(
@@ -160,3 +202,33 @@ async def research_from_text(
         summary=summary,
         warnings=extraction.warnings,
     )
+
+
+@plan_router.post(
+    "/plan",
+    response_model=Itinerary,
+    summary="按结构化需求生成每日行程（LLM 排程 + Python 时间轴）",
+)
+async def plan_trip(
+    requirements: TripRequirements,
+    service: ItineraryService = Depends(get_itinerary_service),
+) -> Itinerary:
+    """第 7 阶段验证接口。
+
+    数据流：
+        需求 → 景点候选（AttractionService）
+             → 交通矩阵（RouteService）
+             → 天气（WeatherService，有 start_date 才查）
+             → LLM 排程（Planner Agent，失败降级规则）
+             → Python 时间轴组装（itinerary_builder）
+             → Itinerary
+
+    在 /docs 里的使用顺序：
+    1. POST /trips/requirements 拿到结构化草稿（可选，也可以手填）。
+    2. 把草稿字段填进这个接口的 body，destination 与 duration_days 必填。
+    3. 返回的 days[].items[] 就是带 start_time / end_time / 交通耗时的行程。
+
+    注意：配置了 OPENAI_API_KEY 且填写了 planner 的 TODO 后才会真正调用 LLM；
+    否则自动使用规则排程，结果里 warnings 会说明原因。
+    """
+    return await service.plan(requirements)

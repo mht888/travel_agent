@@ -32,6 +32,7 @@ from backend.schemas.requirement import (
     RequirementPatch,
     TripRequirementDraft,
 )
+from backend.schemas.restaurant import Restaurant, RestaurantSearchResponse
 from backend.schemas.route import RouteLeg, RouteMatrix, RouteMatrixEntry
 from backend.schemas.trip import TravelStyle, TripRequirements
 from backend.schemas.weather import DailyWeather, WeatherCondition, WeatherForecast
@@ -57,6 +58,8 @@ __all__ = [
     "RequirementExtraction",
     "RequirementExtractionRequest",
     "RequirementPatch",
+    "Restaurant",
+    "RestaurantSearchResponse",
     "RouteLeg",
     "RouteMatrix",
     "RouteMatrixEntry",

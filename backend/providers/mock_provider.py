@@ -11,7 +11,12 @@ from collections.abc import Sequence
 from datetime import date as Date
 from datetime import datetime, time, timedelta, timezone
 
-from backend.providers.base import AttractionProvider, RouteProvider, WeatherProvider
+from backend.providers.base import (
+    AttractionProvider,
+    RestaurantProvider,
+    RouteProvider,
+    WeatherProvider,
+)
 from backend.schemas.attraction import Attraction, AttractionCategory, OpeningInterval
 from backend.schemas.common import (
     DataStatus,
@@ -20,6 +25,7 @@ from backend.schemas.common import (
     Provenance,
     TransportMode,
 )
+from backend.schemas.restaurant import Restaurant
 from backend.schemas.route import RouteMatrixEntry
 from backend.schemas.weather import DailyWeather, WeatherCondition
 
@@ -259,6 +265,219 @@ class MockAttractionProvider(AttractionProvider):
             if attraction.id == attraction_id:
                 return attraction
         return None
+
+
+# ---------------------------- 餐厅 Mock ----------------------------
+
+# 东京最小餐厅数据集：12 条，覆盖 ramen / sushi / tempura / soba / tonkatsu /
+# cafe / vegan 七类菜系，坐标贴近景点，供「每天一顿午餐」的确定性插入使用。
+TOKYO_RESTAURANTS: list[Restaurant] = [
+    Restaurant(
+        id="tokyo-ichiran-shibuya",
+        name="Ichiran Shibuya",
+        city="Tokyo",
+        country="Japan",
+        cuisines=["ramen"],
+        description="连锁豚骨拉面，单人隔间座位，适合快速午餐。",
+        location=GeoPoint(lat=35.6614, lng=139.7006),
+        rating=4.4,
+        review_count=21000,
+        opening_hours=_everyday(time(10, 0), time(23, 0)),
+        average_price=Money(amount=1200, currency="JPY", status=DataStatus.MOCK),
+        provenance=_mock_provenance("mock:tokyo_restaurants"),
+    ),
+    Restaurant(
+        id="tokyo-afuri-ebisu",
+        name="Afuri Ebisu",
+        city="Tokyo",
+        country="Japan",
+        cuisines=["ramen"],
+        description="柚子盐拉面，汤头清爽。",
+        location=GeoPoint(lat=35.6467, lng=139.7101),
+        rating=4.5,
+        review_count=9800,
+        opening_hours=_everyday(time(11, 0), time(23, 0)),
+        average_price=Money(amount=1400, currency="JPY", status=DataStatus.MOCK),
+        provenance=_mock_provenance("mock:tokyo_restaurants"),
+    ),
+    Restaurant(
+        id="tokyo-nakiryu-otsuka",
+        name="Nakiryu",
+        city="Tokyo",
+        country="Japan",
+        cuisines=["ramen"],
+        description="米其林推荐的担担面专门店，饭点排队较长。",
+        location=GeoPoint(lat=35.7185, lng=139.7280),
+        rating=4.6,
+        review_count=7600,
+        opening_hours=_everyday(time(11, 30), time(21, 0)),
+        average_price=Money(amount=1300, currency="JPY", status=DataStatus.MOCK),
+        provenance=_mock_provenance("mock:tokyo_restaurants"),
+    ),
+    Restaurant(
+        id="tokyo-sushi-dai-toyosu",
+        name="Sushi Dai",
+        city="Tokyo",
+        country="Japan",
+        cuisines=["sushi"],
+        description="丰洲市场人气寿司店，需要早到取号。",
+        location=GeoPoint(lat=35.6455, lng=139.7866),
+        rating=4.7,
+        review_count=15400,
+        opening_hours=_everyday(time(5, 30), time(14, 0)),
+        average_price=Money(amount=4000, currency="JPY", status=DataStatus.MOCK),
+        provenance=_mock_provenance("mock:tokyo_restaurants"),
+    ),
+    Restaurant(
+        id="tokyo-uobei-shibuya",
+        name="Uobei Shibuya",
+        city="Tokyo",
+        country="Japan",
+        cuisines=["sushi"],
+        description="高速传送带寿司，性价比高，翻台快。",
+        location=GeoPoint(lat=35.6595, lng=139.6987),
+        rating=4.2,
+        review_count=11200,
+        opening_hours=_everyday(time(11, 0), time(23, 0)),
+        average_price=Money(amount=1500, currency="JPY", status=DataStatus.MOCK),
+        provenance=_mock_provenance("mock:tokyo_restaurants"),
+    ),
+    Restaurant(
+        id="tokyo-tsukiji-sushisen",
+        name="Tsukiji Sushisen",
+        city="Tokyo",
+        country="Japan",
+        cuisines=["sushi"],
+        description="筑地场外市场的寿司老店，午市套餐实惠。",
+        location=GeoPoint(lat=35.6654, lng=139.7707),
+        rating=4.3,
+        review_count=6300,
+        opening_hours=_everyday(time(9, 0), time(21, 0)),
+        average_price=Money(amount=3500, currency="JPY", status=DataStatus.MOCK),
+        provenance=_mock_provenance("mock:tokyo_restaurants"),
+    ),
+    Restaurant(
+        id="tokyo-tempura-kondo",
+        name="Tempura Kondo",
+        city="Tokyo",
+        country="Japan",
+        cuisines=["tempura"],
+        description="银座天妇罗名店，午市套餐相对友好。",
+        location=GeoPoint(lat=35.6717, lng=139.7649),
+        rating=4.6,
+        review_count=5200,
+        opening_hours=_everyday(time(12, 0), time(21, 0)),
+        average_price=Money(amount=8000, currency="JPY", status=DataStatus.MOCK),
+        provenance=_mock_provenance("mock:tokyo_restaurants"),
+    ),
+    Restaurant(
+        id="tokyo-kanda-matsuya",
+        name="Kanda Matsuya",
+        city="Tokyo",
+        country="Japan",
+        cuisines=["soba"],
+        description="神田老字号荞麦面，木造店铺。",
+        location=GeoPoint(lat=35.6960, lng=139.7660),
+        rating=4.4,
+        review_count=8700,
+        opening_hours=_everyday(time(11, 0), time(20, 0)),
+        average_price=Money(amount=1000, currency="JPY", status=DataStatus.MOCK),
+        provenance=_mock_provenance("mock:tokyo_restaurants"),
+    ),
+    Restaurant(
+        id="tokyo-maisen-omotesando",
+        name="Tonkatsu Maisen",
+        city="Tokyo",
+        country="Japan",
+        cuisines=["tonkatsu"],
+        description="表参道炸猪排，黑豚定食是招牌。",
+        location=GeoPoint(lat=35.6654, lng=139.7120),
+        rating=4.4,
+        review_count=13500,
+        opening_hours=_everyday(time(11, 0), time(22, 0)),
+        average_price=Money(amount=1800, currency="JPY", status=DataStatus.MOCK),
+        provenance=_mock_provenance("mock:tokyo_restaurants"),
+    ),
+    Restaurant(
+        id="tokyo-bills-omotesando",
+        name="bills Omotesando",
+        city="Tokyo",
+        country="Japan",
+        cuisines=["cafe", "western"],
+        description="澳式早午餐，适合安排轻松的一天。",
+        location=GeoPoint(lat=35.6670, lng=139.7100),
+        rating=4.3,
+        review_count=10400,
+        opening_hours=_everyday(time(8, 30), time(22, 0)),
+        average_price=Money(amount=2200, currency="JPY", status=DataStatus.MOCK),
+        provenance=_mock_provenance("mock:tokyo_restaurants"),
+    ),
+    Restaurant(
+        id="tokyo-ain-soph-shinjuku",
+        name="Ain Soph Journey",
+        city="Tokyo",
+        country="Japan",
+        cuisines=["vegan", "cafe"],
+        description="新宿素食餐厅，薄饼和套餐都受欢迎。",
+        location=GeoPoint(lat=35.6938, lng=139.7034),
+        rating=4.5,
+        review_count=4100,
+        opening_hours=_everyday(time(11, 0), time(21, 0)),
+        average_price=Money(amount=2000, currency="JPY", status=DataStatus.MOCK),
+        provenance=_mock_provenance("mock:tokyo_restaurants"),
+    ),
+    Restaurant(
+        id="tokyo-ginza-kagari",
+        name="Ginza Kagari",
+        city="Tokyo",
+        country="Japan",
+        cuisines=["ramen"],
+        description="鸡白汤拉面，银座午市排队店。",
+        location=GeoPoint(lat=35.6712, lng=139.7655),
+        rating=4.5,
+        review_count=6900,
+        opening_hours=_everyday(time(11, 0), time(21, 0)),
+        average_price=Money(amount=1600, currency="JPY", status=DataStatus.MOCK),
+        provenance=_mock_provenance("mock:tokyo_restaurants"),
+    ),
+]
+
+
+class MockRestaurantProvider(RestaurantProvider):
+    """内存餐厅数据源。city 匹配大小写不敏感，cuisines 取交集。"""
+
+    def __init__(self, dataset: list[Restaurant] | None = None) -> None:
+        self._dataset: list[Restaurant] = (
+            list(dataset) if dataset is not None else TOKYO_RESTAURANTS
+        )
+
+    async def search_restaurants(
+        self,
+        city: str,
+        cuisines: Sequence[str] | None = None,
+        limit: int = 20,
+    ) -> list[Restaurant]:
+        city_key = city.strip().casefold()
+        wanted = {
+            cuisine.strip().casefold()
+            for cuisine in (cuisines or [])
+            if cuisine.strip()
+        }
+
+        matched: list[Restaurant] = []
+        for restaurant in self._dataset:
+            if restaurant.city.casefold() != city_key:
+                continue
+            if wanted and not (wanted & set(restaurant.cuisines)):
+                continue
+            matched.append(restaurant)
+
+        # Provider 只做兜底排序（评分降序、id 升序保证稳定），偏好排序属于 Service
+        matched.sort(key=lambda item: (-(item.rating or 0.0), item.id))
+
+        if limit <= 0:
+            return []
+        return matched[:limit]
 
 
 # ---------------------------- 路线 Mock ----------------------------

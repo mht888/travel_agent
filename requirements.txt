@@ -26,6 +26,12 @@ langchain-core>=0.3,<2.0
 langgraph>=0.2,<1.0
 langchain-openai>=0.2,<1.0
 
+# 汇率定时同步（第 7 阶段）
+# APScheduler 固定 3.x：4.x 的 API 不兼容
+apscheduler>=3.10,<4.0
+# Windows 上 ZoneInfo("Asia/Shanghai") 依赖 IANA 时区数据
+tzdata>=2024.1
+
 # 测试
 pytest>=8.3,<9.0
 

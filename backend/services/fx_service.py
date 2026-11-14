@@ -344,8 +344,12 @@ class FXService:
 
 @lru_cache(maxsize=1)
 def get_fx_service() -> FXService:
-    """进程内单例。工具和后续的预算改造共用同一份配置。"""
-    return FXService()
+    """进程内单例。数据目录可由 FX_DATA_DIR 覆盖，便于测试和部署。"""
+    from backend.config import get_settings
+
+    settings = get_settings()
+    data_root = Path(settings.fx_data_dir) if settings.fx_data_dir else None
+    return FXService(data_root=data_root)
 
 
 __all__ = [

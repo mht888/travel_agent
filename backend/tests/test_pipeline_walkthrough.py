@@ -32,7 +32,7 @@ from backend.services.requirement_service import RequirementService
 from backend.services.restaurant_service import RestaurantService
 from backend.services.route_service import RouteService
 from backend.services.weather_service import WeatherService
-from backend.agents.requirement_agent import AgentRequirementExtractor
+
 
 COMPLETE_INPUT = (
     "帮我规划一次日本东京 5 日游，12月10日出发，预算 1000 美元，"

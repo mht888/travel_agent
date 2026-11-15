@@ -48,7 +48,7 @@ from backend.services.fx_service import (
     UnknownFXProviderError,
     get_fx_service,
 )
-from backend.tools.fx_tools import get_fx_tools
+from backend.tools.registry import ToolContext, get_profile_tools
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +79,7 @@ def build_fx_graph(
     tools: list[Any] | None = None,
 ):
     """构建并编译汇率 Agent 的 LangGraph。"""
-    tools = tools or get_fx_tools()
+    tools = tools or get_profile_tools("fx")
     agent = agent or create_fx_agent(tools)
 
     graph = StateGraph(FXAgentState)
@@ -220,7 +220,7 @@ async def run_fx_agent(
         - Agent 正常结束但没有发布：如实返回 published=False
     """
     service = service or get_fx_service()
-    tools = tools or get_fx_tools(service)
+    tools = tools or get_profile_tools("fx", ToolContext(fx_service=service))
     before = _load_latest_safely(service)
 
     try:

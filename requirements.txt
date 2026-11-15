@@ -32,6 +32,10 @@ apscheduler>=3.10,<4.0
 # Windows 上 ZoneInfo("Asia/Shanghai") 依赖 IANA 时区数据
 tzdata>=2024.1
 
+# 百度地图 MCP：只用于路线矩阵 / 天气 / 地理编码
+# 需要通过 npx 拉起 @baidumap/mcp-server-baidu-map，本机需 Node 18+
+mcp>=2.3,<3.0
+
 # 测试
 pytest>=8.3,<9.0
 

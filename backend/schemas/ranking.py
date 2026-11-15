@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field, model_validator
 class RankingItem(BaseModel):
     """单个景点的排序结果。
 
-    score 统一归一化到 0~1，rule 与 llm 两套实现的分数才具有可比性。
+    score 统一归一化到 0~1。
     """
 
     id: str = Field(..., min_length=1)
@@ -25,9 +25,9 @@ class AttractionRanking(BaseModel):
 
     ranked_ids: list[str] = Field(default_factory=list, description="按名次排列的景点 id")
     items: list[RankingItem] = Field(default_factory=list)
-    strategy_used: Literal["rule", "llm", "rule_fallback"] = Field(
-        "rule",
-        description="实际生效的策略：rule 纯规则 / llm 大模型 / rule_fallback 大模型失败后回退",
+    strategy_used: Literal["llm"] = Field(
+        "llm",
+        description="实际生效的策略：只使用 llm 评分",
     )
 
     @model_validator(mode="after")
@@ -36,3 +36,4 @@ class AttractionRanking(BaseModel):
         if not self.ranked_ids and self.items:
             self.ranked_ids = [item.id for item in self.items]
         return self
+

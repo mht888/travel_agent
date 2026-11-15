@@ -24,6 +24,8 @@ from backend.api.trip import router as trip_router
 from backend.config import get_settings
 from backend.errors import TravelAgentError
 from backend.scheduler import build_scheduler, run_startup_catch_up
+from backend.tools.baidu_mcp_tools import close_baidu_mcp_client
+from backend.tools.bocha_mcp_tools import close_bocha_mcp_client
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +63,10 @@ def create_app() -> FastAPI:
             if scheduler is not None:
                 scheduler.shutdown(wait=False)
                 app.state.fx_scheduler = None
+            # MCP Server 是 npx 长驻子进程，退出时显式收掉
+            await close_baidu_mcp_client()
+            # 博查是远程 Streamable HTTP 会话，退出时结束会话
+            await close_bocha_mcp_client()
 
     app = FastAPI(
         title=settings.app_name,

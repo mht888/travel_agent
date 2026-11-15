@@ -34,7 +34,7 @@ from backend.agents.research_agent import build_system_prompt, create_research_a
 from backend.graph.nodes import create_agent_node
 from backend.graph.state import ResearchState
 from backend.schemas.trip import TripRequirements
-from backend.tools.travel_tools import get_travel_tools
+from backend.tools.travel_tools import get_research_tools
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +93,7 @@ def build_research_graph(
         - add_conditional_edges 的第三个参数是映射 dict，key 是 should_continue 的返回值。
         - compile() 返回的是 CompiledGraph，可以直接 .ainvoke()。
     """
-    tools = tools or get_travel_tools()
+    tools = tools or get_research_tools()
     agent = agent or create_research_agent(tools)
 
     # TODO: 构建并编译图

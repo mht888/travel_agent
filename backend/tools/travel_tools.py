@@ -311,3 +311,14 @@ def create_travel_tools(
 def get_travel_tools() -> list[BaseTool]:
     """第 6 阶段 bind_tools() 使用的默认工具集。每次返回新实例，可安全修改。"""
     return create_travel_tools()
+
+
+def get_research_tools() -> list[BaseTool]:
+    """Research Agent 的默认工具集，由 tools/registry 的 "research" 画像决定。
+
+    工具名单、启用开关、提示词描述都收敛在注册表里，这里只保留一个兼容入口，
+    方便老代码继续 import。新代码请直接用 registry.get_profile_tools("research")。
+    """
+    from backend.tools.registry import get_profile_tools
+
+    return get_profile_tools("research")

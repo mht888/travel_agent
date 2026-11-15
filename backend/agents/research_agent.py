@@ -18,7 +18,7 @@
 """
 
 import logging
-from typing import Any
+from typing import Any, Sequence
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import SystemMessage
@@ -27,24 +27,33 @@ from langchain_core.runnables import Runnable
 
 from backend.config import get_settings
 from backend.schemas.trip import TripRequirements
-from backend.tools.travel_tools import get_travel_tools
+from backend.tools.registry import get_profile_tools, profile_specs, render_tool_block
 
 logger = logging.getLogger(__name__)
 
 
-def build_system_prompt(requirements: TripRequirements) -> SystemMessage:
+def build_system_prompt(
+    requirements: TripRequirements,
+    tools: Sequence[Any] | None = None,
+) -> SystemMessage:
     """根据旅行需求生成系统提示。
 
     提示要点：
     1. 明确告诉 agent 它的角色是「情报收集者」，不是规划者。
     2. 把用户的目的地、天数、兴趣、节奏等结构化信息塞进去，避免它反复问。
     3. 给一个「什么时候该停」的标准：信息足够输出摘要时就停，不要无限调工具。
+
+    「可用工具」列表由 tools/registry 渲染，不再手写：
+    传 tools 时按实际绑定的工具渲染；不传时按 research 画像 + 当前开关渲染。
     """
     interests_text = "、".join(requirements.interests) if requirements.interests else "未指定"
     budget_text = (
         f"{requirements.budget.amount} {requirements.budget.currency}"
         if requirements.budget
         else "未指定"
+    )
+    tool_block = render_tool_block(
+        tools if tools is not None else profile_specs("research")
     )
 
     content = f"""你是旅行规划系统的情报收集 Agent（Research Agent）。
@@ -60,10 +69,13 @@ def build_system_prompt(requirements: TripRequirements) -> SystemMessage:
 - 人数：{requirements.travelers} 人
 
 可用工具：
-- search_attractions：搜索景点
-- get_attraction_details：获取景点详情（开放时间、游玩时长、票价）
-- get_route_matrix：计算景点间交通时间矩阵
-- get_weather：查询目的地天气
+{tool_block}
+
+MCP 工具的使用边界（必须遵守）：
+- 三个 mcp_* 工具只用于路线矩阵、天气、地理编码，不要用它们搜索或查询景点详情；
+  景点检索与详情继续用 search_attractions / get_attraction_details。
+- mcp_* 的坐标统一按 GCJ-02 传入，不要混用其他坐标系。
+- mcp_route_matrix 不支持 transit；公交方案继续用 get_route_matrix。
 
 工作流程：
 1. 先调用 search_attractions 获取候选景点列表。
@@ -98,10 +110,10 @@ def create_research_agent(tools: list[BaseTool] | None = None) -> Runnable:
     提示：
         - ChatOpenAI 的参数名是 api_key / base_url / model，和 openai SDK 一致。
         - bind_tools 返回的是 Runnable，不是新的 LLM 实例。
-        - tools 为 None 时用 get_travel_tools() 获取默认工具集。
+        - tools 为 None 时用 registry.get_profile_tools("research") 获取默认工具集。
     """
     settings = get_settings()
-    tools = tools or get_travel_tools()
+    tools = tools or get_profile_tools("research")
 
     # TODO: 1. 校验 openai_api_key 是否存在，不存在则抛出 ValueError（提示需要配置 API Key）
     # ------------------------------------------------------------------

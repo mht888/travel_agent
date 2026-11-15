@@ -17,13 +17,14 @@
 """
 
 import logging
+from typing import Any, Sequence
 
 from langchain_core.runnables import Runnable
 from langchain_core.tools import BaseTool
 from langchain_openai import ChatOpenAI
 
 from backend.config import get_settings
-from backend.tools.fx_tools import get_fx_tools
+from backend.tools.registry import get_profile_tools, profile_specs, render_tool_block
 
 logger = logging.getLogger(__name__)
 
@@ -62,13 +63,15 @@ FX_AGENT_SYSTEM_PROMPT = """你是旅行系统的汇率维护 Agent（FX Rate Ag
 """
 
 
-def build_system_prompt() -> str:
+def build_system_prompt(tools: Sequence[Any] | None = None) -> str:
     """汇率 Agent 的系统提示。
 
-    汇率维护没有用户输入，提示词是静态的；动态信息（当前快照、交易日）
+    汇率维护没有用户输入，主体提示是静态的；动态信息（当前快照、交易日）
     全部通过工具获取，避免提示词里塞入会过期的数据。
+    「可用工具」由 tools/registry 的 fx 画像渲染。
     """
-    return FX_AGENT_SYSTEM_PROMPT
+    tool_block = render_tool_block(tools if tools is not None else profile_specs("fx"))
+    return f"{FX_AGENT_SYSTEM_PROMPT}\n可用工具：\n{tool_block}\n"
 
 
 def create_fx_agent(tools: list[BaseTool] | None = None) -> Runnable:
@@ -84,7 +87,7 @@ def create_fx_agent(tools: list[BaseTool] | None = None) -> Runnable:
             "未配置时会自动使用确定性同步流程"
         )
 
-    tools = tools or get_fx_tools()
+    tools = tools or get_profile_tools("fx")
     llm = ChatOpenAI(
         api_key=settings.openai_api_key,
         base_url=settings.openai_base_url,

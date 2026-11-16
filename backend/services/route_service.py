@@ -49,6 +49,16 @@ class RouteService:
                 f"当前 {len(attraction_ids)} 个"
             )
 
+        missing_location = [
+            attraction.id for attraction in attractions if attraction.location is None
+        ]
+        if missing_location:
+            raise ValueError(
+                "景点缺少坐标，无法计算交通矩阵："
+                + "、".join(missing_location)
+                + "；请先补齐地理编码"
+            )
+
         # 单景点没有「不同景点之间」的边，直接返回合法空矩阵，不必调用 Provider
         if len(attraction_ids) == 1:
             return RouteMatrix(

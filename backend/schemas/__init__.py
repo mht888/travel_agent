@@ -18,6 +18,12 @@ from backend.schemas.common import (
     Provenance,
     TransportMode,
 )
+from backend.schemas.hotel import (
+    Hotel,
+    HotelCandidate,
+    HotelCategory,
+    HotelSearchResponse,
+)
 from backend.schemas.itinerary import (
     Itinerary,
     ItineraryDay,
@@ -47,6 +53,10 @@ __all__ = [
     "DailyWeather",
     "DataStatus",
     "GeoPoint",
+    "Hotel",
+    "HotelCandidate",
+    "HotelCategory",
+    "HotelSearchResponse",
     "Itinerary",
     "ItineraryDay",
     "ItineraryItem",

@@ -24,7 +24,12 @@ import httpx
 from backend.config import get_settings
 from backend.errors import ProviderUnavailableError
 from backend.providers.base import AttractionProvider
-from backend.schemas.attraction import Attraction, AttractionCategory, OpeningInterval
+from backend.schemas.attraction import (
+    Attraction,
+    AttractionCategory,
+    OpeningInterval,
+    default_duration_minutes,
+)
 from backend.schemas.common import DataStatus, GeoPoint, Money, Provenance
 
 logger = logging.getLogger(__name__)
@@ -69,16 +74,6 @@ _CATEGORY_KEYWORDS: tuple[tuple[AttractionCategory, tuple[str, ...]], ...] = (
 )
 
 # 百度不提供建议游玩时长，按分类给一个保守默认值，后续可由用户行程反馈修正。
-_DURATION_BY_CATEGORY: dict[AttractionCategory, int] = {
-    AttractionCategory.NATURE: 120,
-    AttractionCategory.ENTERTAINMENT: 120,
-    AttractionCategory.SHOPPING: 90,
-    AttractionCategory.CULTURE: 90,
-    AttractionCategory.OUTDOOR_ACTIVITY: 150,
-    AttractionCategory.WELLNESS: 120,
-}
-_DEFAULT_DURATION_MINUTES = 90
-
 _HOURS_PATTERN = re.compile(
     r"^\s*(\d{1,2}):(\d{2})\s*[-~至]\s*(\d{1,2}):(\d{2})\s*$"
 )
@@ -211,9 +206,7 @@ def _to_attraction(item: dict, city: str) -> Attraction | None:
         rating=rating,
         review_count=review_count,
         opening_hours=_parse_opening_hours(detail.get("shop_hours")),
-        estimated_duration_minutes=_DURATION_BY_CATEGORY.get(
-            category, _DEFAULT_DURATION_MINUTES
-        ),
+        estimated_duration_minutes=default_duration_minutes(category),
         ticket_price=_parse_price(detail),
         provenance=Provenance(
             source="baidu:place_api",

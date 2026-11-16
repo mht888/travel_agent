@@ -72,6 +72,12 @@ def _bd09_to_gcj02(lat: float, lng: float) -> tuple[float, float]:
     return z * math.sin(theta), z * math.cos(theta)
 
 
+def bd09_to_gcj02(lat: float, lng: float) -> tuple[float, float]:
+    """公开入口：服务层组装景点时也要做同样的坐标系转换。"""
+    return _bd09_to_gcj02(lat, lng)
+
+
+
 # ---------------------------- MCP 会话 ----------------------------
 
 

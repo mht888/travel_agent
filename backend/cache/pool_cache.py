@@ -11,23 +11,37 @@
 import time
 import uuid
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 # 默认保留 30 分钟：足够一次 Agent 循环，又不会长期占内存。
 DEFAULT_POOL_TTL_SECONDS = 1800.0
 _MAX_POOL_ENTRIES = 64
 
-PoolKind = Literal["attraction", "web_place"]
+PoolKind = Literal["attraction", "web_place", "selected_attraction"]
 
 
 @dataclass(frozen=True)
 class PoolEntry:
-    """候选池条目：kind 决定排序工具走哪套提示词。"""
+    """缓存条目：kind 区分网页地点候选池 / 初选入选结果等用途。"""
 
     kind: PoolKind
     city: str
     items: list[Any]
+
+
+@dataclass(frozen=True)
+class SelectedAttraction:
+    """初选入选景点：Attraction 的 JSON 快照 + 入选时的排序理由。
+
+    只依赖 stdlib，避免 cache 层反向依赖 schemas；
+    调用方按 attraction["id"] 还原 Attraction。
+    """
+
+    attraction: dict[str, Any]
+    score: float
+    reason: str
+    interests: list[str] = field(default_factory=list)
 
 
 class AttractionPoolCache:
@@ -59,6 +73,21 @@ class AttractionPoolCache:
             PoolEntry(kind=kind, city=city, items=list(items)),
         )
         return search_id
+
+    def save_selection(
+        self,
+        city: str,
+        items: Sequence[SelectedAttraction],
+    ) -> str:
+        """保存初选入选景点，返回 selection_id；过期时间与候选池一致。"""
+        return self.save(city, items, kind="selected_attraction")
+
+    def load_selection(self, selection_id: str) -> list[SelectedAttraction] | None:
+        """按 selection_id 取回入选景点；不存在、已过期或类型不符返回 None。"""
+        entry = self.get_entry(selection_id)
+        if entry is None or entry.kind != "selected_attraction":
+            return None
+        return [item for item in entry.items if isinstance(item, SelectedAttraction)]
 
     def get_entry(self, search_id: str) -> PoolEntry | None:
         self._purge()

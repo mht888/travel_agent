@@ -33,6 +33,23 @@ class AttractionCategory(str, Enum):
     OTHER = "other"
 
 
+# 初始游玩时长按分类估算，精确值等接入详情接口后再覆盖。
+_DEFAULT_DURATION_BY_CATEGORY: dict[AttractionCategory, int] = {
+    AttractionCategory.NATURE: 120,
+    AttractionCategory.ENTERTAINMENT: 120,
+    AttractionCategory.SHOPPING: 90,
+    AttractionCategory.CULTURE: 90,
+    AttractionCategory.OUTDOOR_ACTIVITY: 150,
+    AttractionCategory.WELLNESS: 120,
+}
+DEFAULT_DURATION_MINUTES = 90
+
+
+def default_duration_minutes(category: AttractionCategory) -> int:
+    """没有详情数据时的兜底游玩时长（分钟）。"""
+    return _DEFAULT_DURATION_BY_CATEGORY.get(category, DEFAULT_DURATION_MINUTES)
+
+
 class OpeningInterval(BaseModel):
     """一条开放时段。一周可以有多条（例如午市/晚市分开）。"""
 
@@ -60,7 +77,9 @@ class Attraction(BaseModel):
         default_factory=list, description="细分标签，如 temple / sushi / ramen"
     )
     description: str | None = None
-    location: GeoPoint
+    # 网页初选链路抽出的地点没有坐标，地理编码失败时保持 None；
+    # 需要算交通矩阵前必须先补齐，RouteService 会拦截缺坐标的景点。
+    location: GeoPoint | None = None
     rating: float | None = Field(None, ge=0, le=5)
     review_count: int | None = Field(None, ge=0)
     opening_hours: list[OpeningInterval] = Field(default_factory=list)

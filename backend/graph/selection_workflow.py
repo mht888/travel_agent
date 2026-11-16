@@ -24,6 +24,10 @@ Agent 绑定三个工具：
 finalize 只做收口：
     1. 优先解析最后一条 rank_attraction_pool 的结构化结果；
     2. LLM 的最终回答只作为 summary，不作为数据来源。
+
+图跑完后，入选的 Attraction 连同 score/reason/interests 写入候选池缓存
+（kind=selected_attraction），SelectionOutcome 返回 selection_id，
+后续排程可用 store.load_selection(selection_id) 取回。
 """
 
 import json
@@ -42,10 +46,19 @@ from backend.agents.attraction_selection_agent import (
     build_selection_system_prompt,
     create_attraction_selection_agent,
 )
-from backend.cache.pool_cache import AttractionPoolCache, WebSearchResultCache
+from backend.cache.pool_cache import (
+    AttractionPoolCache,
+    SelectedAttraction,
+    WebSearchResultCache,
+)
 from backend.graph.nodes import create_agent_node
 from backend.graph.selection_state import AttractionSelectionState
+from backend.schemas.attraction import Attraction, AttractionCategory
 from backend.schemas.ranking import AttractionRanking, RankingItem
+from backend.services.attraction_assembly import (
+    AttractionAssembler,
+    create_attraction_assembler,
+)
 from backend.tools.registry import ToolContext, build_tools
 
 logger = logging.getLogger(__name__)
@@ -108,31 +121,70 @@ def _last_ai_summary(messages: Sequence[BaseMessage]) -> str | None:
     return None
 
 
+def _coerce_category(value: Any) -> AttractionCategory:
+    try:
+        return AttractionCategory(str(value or "").strip().lower())
+    except ValueError:
+        return AttractionCategory.OTHER
+
+
+def _ranking_item_from_row(row: dict[str, Any]) -> RankingItem | None:
+    """把工具返回的一行还原成 RankingItem，保留组装 Attraction 需要的字段。"""
+    try:
+        return RankingItem(
+            id=str(row["id"]),
+            score=float(row["score"]),
+            reason=str(row.get("reason") or ""),
+            name=str(row.get("name") or ""),
+            category=_coerce_category(row.get("category")),
+            description=str(row.get("description") or ""),
+            source_url=row.get("source_url"),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def _ranking_from_rank_payload(
     payload: dict[str, Any],
     top_k: int,
 ) -> AttractionRanking | None:
     """把 rank_attraction_pool 的 JSON 还原成 AttractionRanking。"""
     items: list[RankingItem] = []
-    for item in payload.get("items") or []:
-        if not isinstance(item, dict):
+    for row in payload.get("items") or []:
+        if not isinstance(row, dict):
             continue
-        try:
-            items.append(
-                RankingItem(
-                    id=str(item["id"]),
-                    score=float(item["score"]),
-                    reason=str(item.get("reason") or ""),
-                )
-            )
-        except (KeyError, TypeError, ValueError):
-            continue
+        item = _ranking_item_from_row(row)
+        if item is not None:
+            items.append(item)
     if not items:
         return None
     # 网页链路已按兴趣各自截断，这里不能再做全局截断，否则会丢掉分组名额
     if not payload.get("by_interest"):
         items = items[:top_k]
-    return AttractionRanking(ranked_ids=[item.id for item in items], items=items)
+
+    by_interest: dict[str, list[RankingItem]] = {}
+    raw_by_interest = payload.get("by_interest")
+    if isinstance(raw_by_interest, dict):
+        for interest, rows in raw_by_interest.items():
+            if not isinstance(rows, list):
+                continue
+            parsed: list[RankingItem] = []
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                item = _ranking_item_from_row(row)
+                if item is not None:
+                    parsed.append(item)
+            if parsed:
+                by_interest[str(interest)] = parsed
+
+    search_id = payload.get("search_id")
+    return AttractionRanking(
+        ranked_ids=[item.id for item in items],
+        items=items,
+        search_id=str(search_id) if search_id else None,
+        by_interest=by_interest,
+    )
 
 
 def _ranking_from_messages(
@@ -153,8 +205,9 @@ def _ranking_from_messages(
 def create_finalize_node(
     *,
     top_k: int = _DEFAULT_TOP_K,
+    assembler: AttractionAssembler | None = None,
 ):
-    """收口节点：优先用 Agent 的排序结果，缺失时给出警告。"""
+    """收口节点：优先用 Agent 的排序结果，并组装成 Attraction。"""
 
     async def finalize(
         state: AttractionSelectionState,
@@ -166,8 +219,24 @@ def create_finalize_node(
         if ranking is None:
             warnings.append("Agent 没有调用 rank_attraction_pool，没有可用的排序结果")
 
+        attractions: list[Attraction] = []
+        if ranking is not None:
+            if assembler is None:
+                warnings.append(
+                    "未配置景点组装器，本次只返回 ranking，未组装 Attraction"
+                )
+            else:
+                attractions, assemble_warnings = await assembler(
+                    city=state.get("city", ""),
+                    items=ranking.items,
+                )
+                warnings.extend(assemble_warnings)
+
         return {
             "ranking": ranking.model_dump(mode="json") if ranking else None,
+            "attractions": [
+                attraction.model_dump(mode="json") for attraction in attractions
+            ],
             "selection_summary": _last_ai_summary(messages),
             "warnings": warnings,
         }
@@ -180,14 +249,15 @@ def build_selection_graph(
     agent: Runnable,
     tools: list[BaseTool],
     top_k: int = _DEFAULT_TOP_K,
+    assembler: AttractionAssembler | None = None,
 ):
-    """构建并编译「检索 → 排序」的图。"""
+    """构建并编译「检索 → 排序 → 组装」的图。"""
     graph = StateGraph(AttractionSelectionState)
     graph.add_node("agent", create_agent_node(agent))
     graph.add_node("tools", ToolNode(tools))
     graph.add_node(
         "finalize",
-        create_finalize_node(top_k=top_k),
+        create_finalize_node(top_k=top_k, assembler=assembler),
     )
 
     graph.add_edge(START, "agent")
@@ -204,6 +274,31 @@ def build_selection_graph(
 # ---------------------------- 入口 ----------------------------
 
 
+def _selected_attractions(
+    attractions: Sequence[Attraction],
+    ranking: AttractionRanking,
+) -> list[SelectedAttraction]:
+    """把入选 Attraction 与它命中的兴趣、排序理由合并成缓存条目。"""
+    reasons = {item.id: item for item in ranking.items}
+    interests_by_id: dict[str, list[str]] = {}
+    for interest, items in ranking.by_interest.items():
+        for item in items:
+            interests_by_id.setdefault(item.id, []).append(interest)
+
+    selected: list[SelectedAttraction] = []
+    for attraction in attractions:
+        ranked = reasons.get(attraction.id)
+        selected.append(
+            SelectedAttraction(
+                attraction=attraction.model_dump(mode="json"),
+                score=ranked.score if ranked is not None else 0.0,
+                reason=ranked.reason if ranked is not None else "",
+                interests=interests_by_id.get(attraction.id, []),
+            )
+        )
+    return selected
+
+
 @dataclass
 class SelectionOutcome:
     """一次初选的结果 + 它走的是哪条路径。"""
@@ -211,6 +306,9 @@ class SelectionOutcome:
     ranking: AttractionRanking | None
     summary: str
     source: Literal["agent", "unavailable"]
+    attractions: list[Attraction] = field(default_factory=list)
+    # 入选景点已写入 store 时给出 id，可凭它取回 Attraction + 排序理由
+    selection_id: str | None = None
     warnings: list[str] = field(default_factory=list)
 
 
@@ -223,13 +321,15 @@ async def run_attraction_selection(
     agent: Runnable | None = None,
     tools: list[BaseTool] | None = None,
     store: AttractionPoolCache | None = None,
+    assembler: AttractionAssembler | None = None,
 ) -> SelectionOutcome:
     """运行一次景点初选。
 
     参数可注入，方便测试：
     - tools 不传时按 registry 现场组装 mcp_web_search + extract_web_places
       + rank_attraction_pool；
-    - store 是候选池缓存，不传则新建。
+    - store 是候选池缓存（同时用来保存入选景点），不传则新建；
+    - assembler 不传时按配置创建（缺百度 AK 则为 None，只返回 ranking）。
     """
     normalized_city = city.strip()
     if not normalized_city:
@@ -242,6 +342,7 @@ async def run_attraction_selection(
         raise ValueError("interests 不能为空：初选需要按兴趣排序")
 
     store = store or AttractionPoolCache()
+    assembler = assembler or create_attraction_assembler()
     if tools is None:
         web_ctx = ToolContext(
             bocha_result_cache=WebSearchResultCache(),
@@ -281,6 +382,7 @@ async def run_attraction_selection(
         agent=agent,
         tools=tools,
         top_k=top_k,
+        assembler=assembler,
     )
     initial_state: AttractionSelectionState = {
         "messages": [
@@ -295,6 +397,7 @@ async def run_attraction_selection(
         "city": normalized_city,
         "interests": normalized_interests,
         "ranking": None,
+        "attractions": [],
         "selection_summary": None,
         "warnings": [],
     }
@@ -308,6 +411,10 @@ async def run_attraction_selection(
     ranking = (
         AttractionRanking.model_validate(raw_ranking) if raw_ranking else None
     )
+    attractions = [
+        Attraction.model_validate(item)
+        for item in final_state.get("attractions") or []
+    ]
     summary = final_state.get("selection_summary")
     warnings = list(final_state.get("warnings") or [])
 
@@ -322,13 +429,25 @@ async def run_attraction_selection(
     if not summary:
         summary = (
             f"已按 {len(normalized_interests)} 个兴趣完成景点排序，"
-            f"前 {len(ranking.items)} 名见 ranking。"
+            f"前 {len(ranking.items)} 名见 ranking，"
+            f"已组装 {len(attractions)} 个景点。"
         )
+
+    # 入选景点连同排序理由写入候选池缓存，后续排程按 selection_id 取回
+    selection_id = (
+        store.save_selection(
+            normalized_city, _selected_attractions(attractions, ranking)
+        )
+        if attractions
+        else None
+    )
 
     return SelectionOutcome(
         ranking=ranking,
         summary=summary,
         source="agent",
+        attractions=attractions,
+        selection_id=selection_id,
         warnings=warnings,
     )
 

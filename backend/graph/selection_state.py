@@ -21,6 +21,8 @@ class AttractionSelectionState(TypedDict, total=False):
 
     # 产物：AttractionRanking 的 JSON 形式
     ranking: dict[str, Any] | None
+    # 产物：由 ranking 组装出的 Attraction JSON 列表（坐标可能因编码失败为空）
+    attractions: list[dict[str, Any]]
     selection_summary: str | None
 
     # 排序失败原因集中放在这里

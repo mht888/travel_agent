@@ -7,7 +7,7 @@
            finalize → END
 
 收口节点只做两件事：
-    1. 从所有成功的 search_hotels_around 结果里抽酒店，
+    1. 从所有成功的 gaode_mcp.around_search（poi_kind=hotel）结果里抽酒店，
        按 id 去重并转成 Hotel schema（Python 对齐，不靠 LLM 输出字段）；
     2. 把 Agent 最后一段文字作为区域分析摘要。
 
@@ -36,14 +36,16 @@ from backend.graph.hotel_state import HotelSearchState
 from backend.graph.nodes import create_agent_node
 from backend.schemas.hotel import Hotel
 from backend.services.hotel_assembly import hotel_from_summary
-from backend.tools.gaode_hotel_tools import HotelSummary
+from backend.tools.gaode_mcp_tools import HotelSummary
 from backend.tools.registry import ToolContext, build_tools
 
 logger = logging.getLogger(__name__)
 
-_HOTEL_TOOL = "search_hotels_around"
+_HOTEL_TOOL = "gaode_mcp"
+_HOTEL_ACTION = "around_search"
+_HOTEL_POI_KIND = "hotel"
 _HOTEL_TOOL_NAMES = (
-    "search_hotels_around",
+    "gaode_mcp",
     "mcp_geocode",
     "mcp_web_search",
     "mcp_route_matrix",
@@ -136,14 +138,22 @@ def _coerce_payload(value: Any) -> dict[str, Any] | None:
 def _tool_payloads(
     messages: Sequence[BaseMessage],
     tool_name: str,
+    *,
+    action: str | None = None,
+    poi_kind: str | None = None,
 ) -> list[dict[str, Any]]:
     payloads: list[dict[str, Any]] = []
     for message in messages:
         if not isinstance(message, ToolMessage) or message.name != tool_name:
             continue
         payload = _coerce_payload(message.content)
-        if payload is not None and payload.get("ok"):
-            payloads.append(payload)
+        if payload is None or not payload.get("ok"):
+            continue
+        if action is not None and payload.get("action") != action:
+            continue
+        if poi_kind is not None and payload.get("poi_kind") != poi_kind:
+            continue
+        payloads.append(payload)
     return payloads
 
 
@@ -166,7 +176,12 @@ def _hotels_from_messages(
 ) -> list[Hotel]:
     """按调用顺序汇总酒店，按 id 去重（先出现的区域优先）。"""
     hotels: dict[str, Hotel] = {}
-    for payload in _tool_payloads(messages, _HOTEL_TOOL):
+    for payload in _tool_payloads(
+        messages,
+        _HOTEL_TOOL,
+        action=_HOTEL_ACTION,
+        poi_kind=_HOTEL_POI_KIND,
+    ):
         for row in payload.get("items") or []:
             if not isinstance(row, dict):
                 continue
@@ -190,7 +205,8 @@ def create_finalize_node():
         hotels = _hotels_from_messages(messages, city=state.get("city", ""))
         if not hotels:
             warnings.append(
-                "Agent 没有成功调用 search_hotels_around，未获得可用酒店"
+                "Agent 没有成功调用 gaode_mcp（action=around_search, "
+                "poi_kind=hotel），未获得可用酒店"
             )
 
         return {
@@ -276,7 +292,7 @@ async def run_hotel_search(
                 hotels=[],
                 summary="高德酒店搜索不可用，请检查 GAODE_MAPS_AK。",
                 source="unavailable",
-                warnings=["缺少 search_hotels_around（高德 AK 未配置或不可用）"],
+                warnings=["缺少 gaode_mcp（高德 AK 未配置或不可用）"],
             )
 
     if agent is None:

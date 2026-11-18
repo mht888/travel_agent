@@ -61,11 +61,16 @@ class Settings(BaseSettings):
     # 一次 run 里 Agent 可能并行搜多个关键词，按 0.036 元/次控制并发
     bocha_mcp_max_concurrency: int = Field(3, ge=1, le=10)
 
-    # --- 高德地图 Web 服务 API（酒店周边搜索）---
-    # 未配置 GAODE_MAPS_AK 时不会注册 search_hotels_around，见 tools/gaode_hotel_tools.py
+    # --- 高德地图 MCP Server（酒店/餐厅 POI 及全部高德能力）---
+    # 未配置 GAODE_MAPS_AK 时不会注册 gaode_mcp，见 tools/gaode_mcp_tools.py
     gaode_maps_enabled: bool = True
     gaode_maps_ak: str | None = None
-    gaode_place_timeout_seconds: float = Field(10.0, gt=0)
+    # 官方托管端点，ak 以 query 参数拼接：{url}?key=<AK>
+    gaode_mcp_url: str = "https://mcp.amap.com/mcp"
+    gaode_mcp_timeout_seconds: float = Field(30.0, gt=0)
+    gaode_mcp_startup_timeout_seconds: float = Field(30.0, gt=0)
+    # MCP 会话的整体并发上限（详情逐条补齐并单独限速）
+    gaode_mcp_max_concurrency: int = Field(2, ge=1, le=20)
 
     # --- 景点兴趣排序（只走 LLM 评分）---
     attraction_ranking_timeout_seconds: float = Field(30.0, gt=0)

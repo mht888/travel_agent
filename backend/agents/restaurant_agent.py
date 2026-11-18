@@ -7,7 +7,7 @@
 
 提示词按项目里真实可用的工具动态渲染，不写死工具名：
     工具清单来自 TOOL_PROFILES["restaurant_search"]，
-    当前是网页检索 + 地名坐标校验；接入结构化商家检索后会自动进入清单，
+    当前是网页检索 + 高德 MCP（gaode_mcp）+ 地名坐标校验；
     Agent 不需要改提示词。
 
 关键约束写进提示词：商家事实只来自工具；字段缺失写未知；
@@ -70,6 +70,18 @@ def build_restaurant_system_prompt(
     tool_block = render_tool_block(
         tools if tools is not None else profile_specs("restaurant_search")
     )
+    has_gaode = "gaode_mcp" in tool_block
+    merchant_rule = (
+        "- 结构化商家检索：使用 gaode_mcp，action=around_search 且 "
+        "poi_kind=restaurant，longitude / latitude 用已核实的区域或门店坐标，"
+        "radius 用 1500-3000，limit 用 10-25；按店名核实时用 action=text_search "
+        "且 poi_kind=restaurant。\n"
+        "- 只有 gaode_mcp（poi_kind=restaurant）的 around_search 结果会被系统"
+        "转成 Restaurant schema；网页结果只作发现与交叉验证。\n"
+        if has_gaode
+        else "- 本次没有结构化商家检索工具：只能用网页与地名坐标校验，"
+        "并在结论里说明「商家字段未经结构化数据核实」。\n"
+    )
     area_label = (area or "").strip() or "未指定（按城市整体考虑）"
     cuisine_label = "、".join(c.strip() for c in cuisines if c.strip()) or "未指定"
     notes_label = (notes or "").strip() or "无"
@@ -115,7 +127,7 @@ def build_restaurant_system_prompt(
 - 遍历美食类别，构造带「城市 + 类别 + 推荐 / 店铺」的查询词。
 - 区分三类检索能力：网页与内容、结构化商家检索、社交媒体。
   工具清单里没有某类能力时，不要假装使用过。
-- 只从检索结果中抽取明确出现的门店名；美食类别不是门店名。
+{merchant_rule}- 只从检索结果中抽取明确出现的门店名；美食类别不是门店名。
 - 同名不同分店按独立门店处理；同一门店有多个来源时合并并保留全部来源。
 - 不得虚构餐厅、品牌、门店或推荐菜品。
 - 结果不足可以换关键词、扩大范围；覆盖度够了就停止，不要无限扩大搜索。
@@ -124,7 +136,8 @@ def build_restaurant_system_prompt(
 目标：回答「这些门店具体在哪，经营信息是什么」。
 - 对每个候选门店按「城市 + 门店名」做精确检索，核对地址、类别与所在城市。
 - 重点收集：门店名、地址、坐标、类别、评分、评价数、人均消费、营业时间、电话、商家页面。
-- 坐标统一用 GCJ-02，字段是 lat / lng（不是 longitude / latitude）。
+- 坐标统一用 GCJ-02；写进 Restaurant schema 时字段是 lat / lng，
+  调用 gaode_mcp 时按它的参数用 longitude / latitude（数值相同，格式不同）。
 - 字段缺失写未知，不要用 0 或空字符串冒充「有数据」。
 - 同名门店用地址、坐标、类别交叉判断；无法确认时降低匹配置信度，不要强行匹配。
 - 检索到商家信息不等于该门店当前正在营业；营业状态只以查询日期为准并注明。

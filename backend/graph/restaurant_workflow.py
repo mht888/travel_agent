@@ -7,7 +7,7 @@
            finalize → END
 
 收口节点只做两件事：
-    1. 从所有成功的 search_restaurants_around 结果里抽餐厅，
+    1. 从所有成功的 gaode_mcp.around_search（poi_kind=restaurant）结果里抽餐厅，
        按 id 去重并转成 Restaurant schema（Python 对齐，不靠 LLM 输出字段）；
     2. 把 Agent 最后一段文字作为美食与餐厅分析摘要。
 
@@ -41,14 +41,16 @@ from backend.graph.restaurant_state import RestaurantSearchState
 from backend.schemas.common import Money
 from backend.schemas.restaurant import Restaurant
 from backend.services.restaurant_assembly import restaurant_from_summary
-from backend.tools.gaode_restaurant_tools import RestaurantSummary
+from backend.tools.gaode_mcp_tools import RestaurantSummary
 from backend.tools.registry import ToolContext, build_tools
 
 logger = logging.getLogger(__name__)
 
-_RESTAURANT_TOOL = "search_restaurants_around"
+_RESTAURANT_TOOL = "gaode_mcp"
+_RESTAURANT_ACTION = "around_search"
+_RESTAURANT_POI_KIND = "restaurant"
 _RESTAURANT_TOOL_NAMES = (
-    "search_restaurants_around",
+    "gaode_mcp",
     "mcp_web_search",
     "mcp_geocode",
 )
@@ -109,6 +111,10 @@ def _restaurants_from_messages(
         payload = _coerce_payload(message.content)
         if payload is None or not payload.get("ok"):
             continue
+        if payload.get("action") != _RESTAURANT_ACTION:
+            continue
+        if payload.get("poi_kind") != _RESTAURANT_POI_KIND:
+            continue
         for row in payload.get("items") or []:
             if not isinstance(row, dict):
                 continue
@@ -155,7 +161,8 @@ def create_finalize_node():
         )
         if not restaurants:
             warnings.append(
-                "Agent 没有成功调用 search_restaurants_around，未获得结构化餐厅"
+                "Agent 没有成功调用 gaode_mcp（action=around_search, "
+                "poi_kind=restaurant），未获得结构化餐厅"
             )
 
         summary = _last_ai_summary(messages)
@@ -204,7 +211,7 @@ def build_restaurant_graph(
 class RestaurantSearchOutcome:
     """一次餐厅搜索的结果。
 
-    restaurants 只来自 search_restaurants_around 的工具结果；
+    restaurants 只来自 gaode_mcp（poi_kind=restaurant）的工具结果；
     summary 是 Agent 的文字分析，不参与结构化字段。
     """
 

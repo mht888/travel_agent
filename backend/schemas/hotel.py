@@ -6,7 +6,7 @@
     硬塞进已有模型会让第 8 阶段的住宿预算和推荐理由都变含糊。
 
 分层约定：
-    HotelSummary（tools/gaode_hotel_tools.py）是给 LLM 看的工具 DTO，
+    HotelSummary（tools/gaode_mcp_tools.py）是给 LLM 看的工具 DTO，
     金额按 Tool 约定用字符串；Hotel 是业务层实体，金额用 Money，
     必须带 Provenance。Provider / 组装层负责 DTO → 实体。
 

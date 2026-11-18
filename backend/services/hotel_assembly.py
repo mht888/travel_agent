@@ -15,7 +15,7 @@ from decimal import Decimal, InvalidOperation
 
 from backend.schemas.common import DataStatus, Money, Provenance
 from backend.schemas.hotel import Hotel, HotelCategory
-from backend.tools.gaode_hotel_tools import HotelSummary
+from backend.tools.gaode_mcp_tools import HotelSummary
 
 _STAR_PATTERN = re.compile(r"([一二三四五1-5])星级")
 _STAR_VALUES = {
@@ -85,7 +85,7 @@ def hotel_from_summary(
     *,
     city: str,
     fetched_at: datetime | None = None,
-    source: str = "gaode:poi_around",
+    source: str = "gaode:mcp_around",
 ) -> Hotel:
     """把一条酒店 DTO 转成业务实体。
 

@@ -15,7 +15,7 @@ from decimal import Decimal, InvalidOperation
 
 from backend.schemas.common import DataStatus, Money, Provenance
 from backend.schemas.restaurant import Restaurant
-from backend.tools.gaode_restaurant_tools import RestaurantSummary
+from backend.tools.gaode_mcp_tools import RestaurantSummary
 
 # 一级类目，对「吃什么」没有信息量，不进入 cuisines
 _BROAD_TYPES = frozenset({"餐饮服务"})
@@ -49,7 +49,7 @@ def restaurant_from_summary(
     *,
     city: str,
     fetched_at: datetime | None = None,
-    source: str = "gaode:poi_around",
+    source: str = "gaode:mcp_around",
 ) -> Restaurant | None:
     """把一条餐厅 DTO 转成业务实体。
 

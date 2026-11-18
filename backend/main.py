@@ -26,6 +26,7 @@ from backend.errors import TravelAgentError
 from backend.scheduler import build_scheduler, run_startup_catch_up
 from backend.tools.baidu_mcp_tools import close_baidu_mcp_client
 from backend.tools.bocha_mcp_tools import close_bocha_mcp_client
+from backend.tools.gaode_mcp_tools import close_gaode_mcp_client
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,8 @@ def create_app() -> FastAPI:
             await close_baidu_mcp_client()
             # 博查是远程 Streamable HTTP 会话，退出时结束会话
             await close_bocha_mcp_client()
+            # 高德同为远程 Streamable HTTP 会话，退出时结束
+            await close_gaode_mcp_client()
 
     app = FastAPI(
         title=settings.app_name,

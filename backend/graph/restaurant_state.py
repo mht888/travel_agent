@@ -6,7 +6,7 @@
     不依赖景点坐标——后续要按天排餐时，再把当天的景点锚点加进来。
 
 restaurants 存 Restaurant 的 JSON（已对齐 restaurant schema），
-只来自 search_restaurants_around 的工具结果，不取自 LLM 文本；
+只来自 gaode_mcp（poi_kind=restaurant）的工具结果，不取自 LLM 文本；
 restaurant_summary 是 Agent 的最终文字结论。
 """
 

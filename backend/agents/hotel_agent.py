@@ -6,7 +6,8 @@
 
 提示词按项目里真实可用的工具改写，不保留模板中不存在的
 Business Search / Directions 等抽象工具名：
-    search_hotels_around  高德周边搜索（中心点必须是真实坐标）
+    gaode_mcp             高德 MCP 统一工具（action=around_search, poi_kind=hotel；
+                          中心点必须是真实坐标；也提供详情/地理编码/天气/路线）
     mcp_geocode           地名 → GCJ-02 坐标，用来验证「新发现区域」
     mcp_web_search        查区域背景、商圈、住宿环境
     mcp_route_matrix      百度路线矩阵（无 transit），用于交通便利度
@@ -54,7 +55,7 @@ def build_hotel_system_prompt(
     geocode_rule = (
         "- 新区域验证：提出输入里没有的区域时，先用 mcp_geocode 把"
         "「城市 + 区域名」转成坐标（如「南宁市 青秀区 朝阳广场」）。"
-        "返回的 location.lng / location.lat 就是 search_hotels_around 的"
+        "返回的 location.lng / location.lat 就是 gaode_mcp 的"
         " longitude / latitude；geocode 失败的区域直接放弃，不要猜坐标。\n"
         if has_geocode
         else "- 本次没有 geocode 工具：只能围绕入选景点坐标搜索，"
@@ -107,9 +108,10 @@ Step 3 验证候选区域
 {geocode_rule}{web_rule}{route_rule}- 未经工具验证的关系要标成「推测」，不要写成事实。
 
 Step 4 搜索酒店
-- 每个候选区域中心调用一次 search_hotels_around：
-  radius 用 1500-3000，limit 用 10-25，sortrule 默认 distance。
-- keywords 只在确有偏好时填写（如 民宿 / 经济型 / 五星级），否则留空。
+- 每个候选区域中心调用一次 gaode_mcp：
+  action=around_search，poi_kind=hotel，longitude / latitude 用区域中心，
+  radius 用 1500-3000，limit 用 10-25（默认按距离升序返回）。
+- keywords 只在确有偏好时填写（如 民宿 / 经济型 / 五星级），否则留空（默认搜「酒店」）。
 - 至少覆盖 2 个区域；总搜索次数不超过 6 次；不要为每个景点各搜一遍。
 - 工具返回 error_code 时最多重试 1 次；仍失败就降低该区域置信度并说明原因。
 - 不要重复调用「同一中心 + 同一参数」的搜索。
@@ -119,7 +121,7 @@ Step 5 区域比较与收口
 - 缺少某项数据就写「未验证」，禁止虚构评分、价格、房态、交通时间。
 - 最后用 Markdown 输出：景点分布判断、候选区域及发现依据、优缺点、区域排序、未核实项。
 - 明确区分「用户给定的景点」与「你新发现的区域」。
-- 不要输出酒店 JSON；酒店明细由系统从 search_hotels_around 结果统一转成 Hotel schema。
+- 不要输出酒店 JSON；酒店明细由系统从 gaode_mcp（poi_kind=hotel）结果统一转成 Hotel schema。
 """
     return SystemMessage(content=content)
 
@@ -137,10 +139,10 @@ def create_hotel_agent(
 
     if not tools:
         raise ValueError(
-            "酒店 Agent 需要 search_hotels_around，请配置 GAODE_MAPS_AK"
+            "酒店 Agent 需要 gaode_mcp，请配置 GAODE_MAPS_AK"
         )
-    if not any(tool.name == "search_hotels_around" for tool in tools):
-        raise ValueError("酒店 Agent 缺少 search_hotels_around 工具")
+    if not any(tool.name == "gaode_mcp" for tool in tools):
+        raise ValueError("酒店 Agent 缺少 gaode_mcp 工具")
     if not settings.openai_api_key:
         raise ValueError("酒店 Agent 需要 OPENAI_API_KEY，请在 .env 中配置")
 

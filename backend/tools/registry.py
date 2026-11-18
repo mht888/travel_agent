@@ -49,7 +49,7 @@ def _bocha_enabled(settings: Any) -> bool:
     )
 
 
-def _gaode_hotel_enabled(settings: Any) -> bool:
+def _gaode_mcp_enabled(settings: Any) -> bool:
     return bool(getattr(settings, "gaode_maps_enabled", False)) and bool(
         getattr(settings, "gaode_maps_ak", None)
     )
@@ -86,8 +86,7 @@ class ToolContext:
     fx_service: Any = None
     baidu_mcp_caller: Any = None
     bocha_caller: Any = None
-    gaode_hotel_searcher: Any = None
-    gaode_restaurant_searcher: Any = None
+    gaode_mcp_caller: Any = None
 
 
 # ---------------------------- 工具清单 ----------------------------
@@ -152,22 +151,17 @@ TOOL_SPECS: dict[str, ToolSpec] = {
         group="rank_pool",
         prompt_hint="按兴趣对候选池排序，返回 score 与理由；网页地点按每个兴趣各取前 7 个",
     ),
-    # 酒店周边搜索（高德 POI 2.0，需要 key）
-    "search_hotels_around": ToolSpec(
-        name="search_hotels_around",
-        group="gaode_hotel",
-        prompt_hint="高德周边搜索：以景点坐标为中心找酒店，返回距离、评分、人均价格与电话",
-        enabled=_gaode_hotel_enabled,
-    ),
-    # 餐厅周边搜索（同一个高德 AK，types=050000）
-    "search_restaurants_around": ToolSpec(
-        name="search_restaurants_around",
-        group="gaode_restaurant",
+    # 高德地图 MCP：一个工具覆盖周边/关键词搜索、详情、地理编码、天气、路线等（需要 key）
+    "gaode_mcp": ToolSpec(
+        name="gaode_mcp",
+        group="gaode_mcp",
         prompt_hint=(
-            "高德周边搜索：以坐标为中心找餐厅，返回菜系、地址、距离、"
-            "评分、人均消费、今日营业时间与电话"
+            "高德地图 MCP：action=around_search 按坐标找 POI（酒店传 poi_kind=hotel，"
+            "餐厅传 poi_kind=restaurant，返回距离/评分/人均/营业时间）；"
+            "也支持 text_search、poi_detail、geocode、regeocode、weather、distance、"
+            "route、ip_location、personal_map、navigate、taxi"
         ),
-        enabled=_gaode_hotel_enabled,
+        enabled=_gaode_mcp_enabled,
     ),
     # 汇率维护（fx_tools）
     "fetch_fx_rates": ToolSpec(
@@ -219,14 +213,13 @@ TOOL_PROFILES: dict[str, tuple[str, ...]] = {
     ),
     # 酒店搜索：先验证候选区域（geocode / 网页），再搜酒店与交通
     "hotel_search": (
-        "search_hotels_around",
+        "gaode_mcp",
         "mcp_geocode",
         "mcp_web_search",
-       
     ),
     # 餐厅搜索：网页发现美食与门店 + 高德商家核实 + 地名坐标校验
     "restaurant_search": (
-        "search_restaurants_around",
+        "gaode_mcp",
         "mcp_web_search",
         "mcp_geocode",
     ),
@@ -310,20 +303,11 @@ def _build_rank_pool(ctx: ToolContext) -> list[BaseTool]:
     ]
 
 
-def _build_gaode_hotel(ctx: ToolContext) -> list[BaseTool]:
-    from backend.tools.gaode_hotel_tools import create_gaode_hotel_tools
+def _build_gaode_mcp(ctx: ToolContext) -> list[BaseTool]:
+    from backend.tools.gaode_mcp_tools import create_gaode_mcp_tools
 
-    return create_gaode_hotel_tools(
-        searcher=ctx.gaode_hotel_searcher,
-        settings=ctx.settings,
-    )
-
-
-def _build_gaode_restaurant(ctx: ToolContext) -> list[BaseTool]:
-    from backend.tools.gaode_restaurant_tools import create_gaode_restaurant_tools
-
-    return create_gaode_restaurant_tools(
-        searcher=ctx.gaode_restaurant_searcher,
+    return create_gaode_mcp_tools(
+        caller=ctx.gaode_mcp_caller,
         settings=ctx.settings,
     )
 
@@ -340,8 +324,7 @@ TOOL_GROUPS: dict[str, Callable[[ToolContext], list[BaseTool]]] = {
     "bocha": _build_bocha,
     "web_place_extract": _build_web_place_extract,
     "rank_pool": _build_rank_pool,
-    "gaode_hotel": _build_gaode_hotel,
-    "gaode_restaurant": _build_gaode_restaurant,
+    "gaode_mcp": _build_gaode_mcp,
     "fx": _build_fx,
 }
 
@@ -370,12 +353,7 @@ def _enabled_for(spec: ToolSpec, ctx: ToolContext) -> bool:
         return True
     if spec.group == "bocha" and ctx.bocha_caller is not None:
         return True
-    if spec.group == "gaode_hotel" and ctx.gaode_hotel_searcher is not None:
-        return True
-    if (
-        spec.group == "gaode_restaurant"
-        and ctx.gaode_restaurant_searcher is not None
-    ):
+    if spec.group == "gaode_mcp" and ctx.gaode_mcp_caller is not None:
         return True
     return False
 

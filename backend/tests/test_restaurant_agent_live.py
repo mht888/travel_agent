@@ -2,7 +2,8 @@ r"""餐厅 Agent 单跑（会联网 + 调用 LLM，默认跳过）。
 
 链路：
     城市 / 口味 / 预算 → 四阶段提示词
-    → Agent 调 search_restaurants_around（高德周边）、mcp_web_search、mcp_geocode
+    → Agent 调 gaode_mcp（action=around_search, poi_kind=restaurant）、
+      mcp_web_search、mcp_geocode
     → finalize 从工具结果解析 Restaurant（按 id 去重）
 
 会打印：
@@ -67,7 +68,7 @@ def _pretty(payload: str) -> str:
     if data.get("ok") is False:
         return f"tool error: {json.dumps(data, ensure_ascii=False)}"
 
-    # search_restaurants_around
+    # gaode_mcp around_search（poi_kind=restaurant）
     if data.get("center") is not None and data.get("items") is not None:
         center = data["center"]
         lines = [
@@ -107,7 +108,7 @@ async def _run() -> None:
         f"bocha={'有' if settings.bocha_apikey else '无'} "
         f"gaode={'有' if settings.gaode_maps_ak else '无'}"
     )
-    if "search_restaurants_around" not in names:
+    if "gaode_mcp" not in names:
         raise AssertionError("餐厅周边搜索不可用，请检查 GAODE_MAPS_AK 是否已配置")
     if "mcp_web_search" not in names:
         print("警告：没有网页检索，只能做周边搜索，做不了特色美食发现")

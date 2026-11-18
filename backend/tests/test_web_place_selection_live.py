@@ -10,7 +10,7 @@ r"""景点初选 + 酒店搜索真实链路（会联网 + 调用 LLM，默认跳
 阶段二：酒店搜索
     selection_id → compact_anchors（只保留酒店 Agent 需要的字段）
     → 酒店 Agent（区域发现 → geocode / 网页验证）
-    → search_hotels_around（每个候选区域一次）
+    → gaode_mcp（action=around_search, poi_kind=hotel，每个候选区域一次）
     → finalize 转成 Hotel schema（按 id 去重）
 
 会打印：
@@ -134,7 +134,7 @@ def _pretty(payload: str, limit: int = 5) -> str:
     if data.get("ok") is False:
         return f"tool error: {json.dumps(data, ensure_ascii=False)}"
 
-    # search_hotels_around：中心点 + 酒店列表
+    # gaode_mcp around_search：中心点 + 酒店列表
     if data.get("center") is not None and data.get("items") is not None:
         center = data["center"]
         lines = [
@@ -316,7 +316,7 @@ async def _run() -> None:
 
     # ---------------------------- 阶段二：酒店搜索 ----------------------------
     hotel_tools = get_profile_tools("hotel_search")
-    if not any(tool.name == "search_hotels_around" for tool in hotel_tools):
+    if not any(tool.name == "gaode_mcp" for tool in hotel_tools):
         raise AssertionError("酒店工具不可用，请检查 GAODE_MAPS_AK 是否配置")
 
     anchors, anchor_warnings = compact_anchors(entries)

@@ -27,7 +27,7 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
 ENDPOINT = os.getenv("BOCHA_MCP_URL", "https://mcp.bochaai.com/mcp")
-QUERY = "南宁 夜宵 热门"
+QUERY = "南宁必吃美食推荐店铺"
 # 可选值：noLimit / oneDay / oneWeek / oneMonth / oneYear / YYYY-MM-DD / YYYY-MM-DD..YYYY-MM-DD
 FRESHNESS = os.getenv("BOCHA_FRESHNESS", "noLimit")
 ENV_PATH = Path(__file__).resolve().parents[2] / ".env"

@@ -87,6 +87,7 @@ class ToolContext:
     baidu_mcp_caller: Any = None
     bocha_caller: Any = None
     gaode_hotel_searcher: Any = None
+    gaode_restaurant_searcher: Any = None
 
 
 # ---------------------------- 工具清单 ----------------------------
@@ -158,6 +159,16 @@ TOOL_SPECS: dict[str, ToolSpec] = {
         prompt_hint="高德周边搜索：以景点坐标为中心找酒店，返回距离、评分、人均价格与电话",
         enabled=_gaode_hotel_enabled,
     ),
+    # 餐厅周边搜索（同一个高德 AK，types=050000）
+    "search_restaurants_around": ToolSpec(
+        name="search_restaurants_around",
+        group="gaode_restaurant",
+        prompt_hint=(
+            "高德周边搜索：以坐标为中心找餐厅，返回菜系、地址、距离、"
+            "评分、人均消费、今日营业时间与电话"
+        ),
+        enabled=_gaode_hotel_enabled,
+    ),
     # 汇率维护（fx_tools）
     "fetch_fx_rates": ToolSpec(
         name="fetch_fx_rates",
@@ -212,6 +223,12 @@ TOOL_PROFILES: dict[str, tuple[str, ...]] = {
         "mcp_geocode",
         "mcp_web_search",
        
+    ),
+    # 餐厅搜索：网页发现美食与门店 + 高德商家核实 + 地名坐标校验
+    "restaurant_search": (
+        "search_restaurants_around",
+        "mcp_web_search",
+        "mcp_geocode",
     ),
     "fx": (
         "fetch_fx_rates",
@@ -302,6 +319,15 @@ def _build_gaode_hotel(ctx: ToolContext) -> list[BaseTool]:
     )
 
 
+def _build_gaode_restaurant(ctx: ToolContext) -> list[BaseTool]:
+    from backend.tools.gaode_restaurant_tools import create_gaode_restaurant_tools
+
+    return create_gaode_restaurant_tools(
+        searcher=ctx.gaode_restaurant_searcher,
+        settings=ctx.settings,
+    )
+
+
 def _build_fx(ctx: ToolContext) -> list[BaseTool]:
     from backend.tools.fx_tools import get_fx_tools
 
@@ -315,6 +341,7 @@ TOOL_GROUPS: dict[str, Callable[[ToolContext], list[BaseTool]]] = {
     "web_place_extract": _build_web_place_extract,
     "rank_pool": _build_rank_pool,
     "gaode_hotel": _build_gaode_hotel,
+    "gaode_restaurant": _build_gaode_restaurant,
     "fx": _build_fx,
 }
 
@@ -344,6 +371,11 @@ def _enabled_for(spec: ToolSpec, ctx: ToolContext) -> bool:
     if spec.group == "bocha" and ctx.bocha_caller is not None:
         return True
     if spec.group == "gaode_hotel" and ctx.gaode_hotel_searcher is not None:
+        return True
+    if (
+        spec.group == "gaode_restaurant"
+        and ctx.gaode_restaurant_searcher is not None
+    ):
         return True
     return False
 

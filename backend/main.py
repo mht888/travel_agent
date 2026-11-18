@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from backend.api.fx import router as fx_router
+from backend.api.flights import router as flights_router
 from backend.api.health import router as health_router
 from backend.api.trip import requirements_router
 from backend.api.trip import research_router
@@ -89,6 +90,7 @@ def create_app() -> FastAPI:
 
     app.include_router(health_router, prefix=settings.api_prefix)
     app.include_router(fx_router, prefix=settings.api_prefix)
+    app.include_router(flights_router, prefix=settings.api_prefix)
     app.include_router(trip_router, prefix=settings.api_prefix)
     app.include_router(restaurant_router, prefix=settings.api_prefix)
     app.include_router(requirements_router, prefix=settings.api_prefix)

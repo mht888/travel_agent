@@ -84,6 +84,27 @@ def test_build_tools_rejects_unknown_name() -> None:
         build_tools(["no_such_tool"], _ctx())
 
 
+def test_flight_tool_is_available_without_binding_it_to_research(monkeypatch) -> None:
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from backend.tools import flight_web_tools
+    from backend.tools.flight_web_tools import FlightQuery, FlightSearchResult
+
+    ctx = _ctx(settings=SimpleNamespace(openai_api_key="test-key"))
+    assert all(spec.name != "search_flights_web" for spec in profile_specs("research", ctx))
+    [flight_tool] = build_tools(["search_flights_web"], ctx)
+    assert flight_tool is flight_web_tools.search_flights_web
+
+    search = AsyncMock(return_value=FlightSearchResult(status="ok", excerpts=["HK$2,171"]))
+    monkeypatch.setattr(flight_web_tools, "run_flight_search", search)
+    query = {"origin": "HKG", "destination": "KIX", "departure": "2026-12-10"}
+    result = asyncio.run(flight_tool.ainvoke({"query": query}))
+    assert result["excerpts"] == ["HK$2,171"]
+    search.assert_awaited_once_with(FlightQuery.model_validate(query))
+
+
 def test_prompt_tools_match_bound_tools() -> None:
     """关闭 MCP 后，提示词里的工具清单必须与真正 bind 的工具一致。"""
     ctx = _ctx()

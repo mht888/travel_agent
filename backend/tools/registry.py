@@ -139,6 +139,12 @@ TOOL_SPECS: dict[str, ToolSpec] = {
         prompt_hint="网页搜索：按兴趣检索城市地点线索，也可查临时闭馆、活动、票价与近期口碑",
         enabled=_bocha_enabled,
     ),
+    "search_flights_web": ToolSpec(
+        name="search_flights_web",
+        group="flight_web",
+        prompt_hint="用 KAYAK 香港站查指定航线和日期的单程或往返报价，返回来源与状态",
+        enabled=lambda settings: bool(getattr(settings, "openai_api_key", None)),
+    ),
     # 景点初选（web_place_extract_tools / rank_attraction_pool_tools）
     "extract_web_places": ToolSpec(
         name="extract_web_places",
@@ -318,6 +324,12 @@ def _build_fx(ctx: ToolContext) -> list[BaseTool]:
     return get_fx_tools(ctx.fx_service)
 
 
+def _build_flight_web(_ctx: ToolContext) -> list[BaseTool]:
+    from backend.tools.flight_web_tools import search_flights_web
+
+    return [search_flights_web]
+
+
 TOOL_GROUPS: dict[str, Callable[[ToolContext], list[BaseTool]]] = {
     "travel": _build_travel,
     "baidu_mcp": _build_baidu_mcp,
@@ -326,6 +338,7 @@ TOOL_GROUPS: dict[str, Callable[[ToolContext], list[BaseTool]]] = {
     "rank_pool": _build_rank_pool,
     "gaode_mcp": _build_gaode_mcp,
     "fx": _build_fx,
+    "flight_web": _build_flight_web,
 }
 
 

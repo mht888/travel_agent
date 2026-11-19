@@ -20,10 +20,20 @@ class DayPlan(BaseModel):
     attraction_ids: list[str] = Field(
         ...,
         min_length=1,
-        max_length=6,
+        max_length=7,
         description="当天按游玩顺序排列的景点 id，必须来自候选列表",
     )
     theme: str | None = Field(None, description="当天主题，如「浅草老城与下町美食」")
+    evening_attraction_ids: list[str] = Field(
+        default_factory=list, description="当日景点中适合晚间游览的 ID，例如夜市"
+    )
+
+    @model_validator(mode="after")
+    def _validate_evening_ids(self) -> "DayPlan":
+        evening = set(self.evening_attraction_ids)
+        if len(evening) != len(self.evening_attraction_ids) or not evening.issubset(self.attraction_ids):
+            raise ValueError("晚间景点 ID 必须属于当天安排，且不能重复")
+        return self
 
     @field_validator("attraction_ids")
     @classmethod

@@ -7,6 +7,7 @@ from datetime import date
 
 from backend.providers.base import WeatherProvider
 from backend.schemas.weather import WeatherForecast
+from backend.schemas.city import canonical_city_name
 
 
 class WeatherService:
@@ -28,7 +29,7 @@ class WeatherService:
 
         参数错误直接抛 ValueError；Service 不依赖 FastAPI，可独立测试。
         """
-        normalized_city = city.strip()
+        normalized_city = canonical_city_name(city)
         if not normalized_city:
             raise ValueError("city 不能为空白")
         if not 1 <= days <= self.MAX_FORECAST_DAYS:

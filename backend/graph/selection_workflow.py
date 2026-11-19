@@ -34,6 +34,7 @@ import json
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any, Literal
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
@@ -55,6 +56,7 @@ from backend.graph.nodes import create_agent_node
 from backend.graph.selection_state import AttractionSelectionState
 from backend.schemas.attraction import Attraction, AttractionCategory
 from backend.schemas.ranking import AttractionRanking, RankingItem
+from backend.schemas.restaurant import Restaurant
 from backend.services.attraction_assembly import (
     AttractionAssembler,
     create_attraction_assembler,
@@ -206,6 +208,7 @@ def create_finalize_node(
     *,
     top_k: int = _DEFAULT_TOP_K,
     assembler: AttractionAssembler | None = None,
+    start_date: date | None = None,
 ):
     """收口节点：优先用 Agent 的排序结果，并组装成 Attraction。"""
 
@@ -220,23 +223,28 @@ def create_finalize_node(
             warnings.append("Agent 没有调用 rank_attraction_pool，没有可用的排序结果")
 
         attractions: list[Attraction] = []
+        restaurants: list[Restaurant] = []
         if ranking is not None:
             if assembler is None:
                 warnings.append(
                     "未配置景点组装器，本次只返回 ranking，未组装 Attraction"
                 )
             else:
-                attractions, assemble_warnings = await assembler(
+                assembled = await assembler(
                     city=state.get("city", ""),
                     items=ranking.items,
+                    start_date=start_date,
                 )
-                warnings.extend(assemble_warnings)
+                attractions = assembled.attractions
+                restaurants = assembled.restaurants
+                warnings.extend(assembled.warnings)
 
         return {
             "ranking": ranking.model_dump(mode="json") if ranking else None,
             "attractions": [
                 attraction.model_dump(mode="json") for attraction in attractions
             ],
+            "restaurants": [restaurant.model_dump(mode="json") for restaurant in restaurants],
             "selection_summary": _last_ai_summary(messages),
             "warnings": warnings,
         }
@@ -250,6 +258,7 @@ def build_selection_graph(
     tools: list[BaseTool],
     top_k: int = _DEFAULT_TOP_K,
     assembler: AttractionAssembler | None = None,
+    start_date: date | None = None,
 ):
     """构建并编译「检索 → 排序 → 组装」的图。"""
     graph = StateGraph(AttractionSelectionState)
@@ -257,7 +266,7 @@ def build_selection_graph(
     graph.add_node("tools", ToolNode(tools))
     graph.add_node(
         "finalize",
-        create_finalize_node(top_k=top_k, assembler=assembler),
+        create_finalize_node(top_k=top_k, assembler=assembler, start_date=start_date),
     )
 
     graph.add_edge(START, "agent")
@@ -310,6 +319,7 @@ class SelectionOutcome:
     # 入选景点已写入 store 时给出 id，可凭它取回 Attraction + 排序理由
     selection_id: str | None = None
     warnings: list[str] = field(default_factory=list)
+    restaurants: list[Restaurant] = field(default_factory=list)
 
 
 async def run_attraction_selection(
@@ -317,6 +327,7 @@ async def run_attraction_selection(
     interests: Sequence[str] | None = None,
     *,
     notes: str | None = None,
+    start_date: date | None = None,
     top_k: int = _DEFAULT_TOP_K,
     agent: Runnable | None = None,
     tools: list[BaseTool] | None = None,
@@ -329,7 +340,7 @@ async def run_attraction_selection(
     - tools 不传时按 registry 现场组装 mcp_web_search + extract_web_places
       + rank_attraction_pool；
     - store 是候选池缓存（同时用来保存入选景点），不传则新建；
-    - assembler 不传时按配置创建（缺百度 AK 则为 None，只返回 ranking）。
+    - assembler 不传时按配置创建（高德 MCP 未启用或缺少高德 AK 则为 None，只返回 ranking）。
     """
     normalized_city = city.strip()
     if not normalized_city:
@@ -383,6 +394,7 @@ async def run_attraction_selection(
         tools=tools,
         top_k=top_k,
         assembler=assembler,
+        start_date=start_date,
     )
     initial_state: AttractionSelectionState = {
         "messages": [
@@ -449,6 +461,9 @@ async def run_attraction_selection(
         attractions=attractions,
         selection_id=selection_id,
         warnings=warnings,
+        restaurants=[
+            Restaurant.model_validate(item) for item in final_state.get("restaurants", [])
+        ],
     )
 
 

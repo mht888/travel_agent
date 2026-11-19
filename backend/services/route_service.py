@@ -10,6 +10,7 @@ from collections.abc import Sequence
 
 from backend.providers.base import RouteProvider
 from backend.schemas.attraction import Attraction
+from backend.schemas.city import canonical_city_name
 from backend.schemas.common import TransportMode
 from backend.schemas.route import RouteMatrix
 
@@ -34,7 +35,7 @@ class RouteService:
         参数错误直接抛 ValueError，由调用方（Router / Graph Node）决定如何呈现；
         这里不引入 HTTP 概念，保证 Service 可以脱离 FastAPI 独立测试。
         """
-        normalized_city = city.strip()
+        normalized_city = canonical_city_name(city)
         if not normalized_city:
             raise ValueError("city 不能为空白")
 

@@ -8,9 +8,7 @@
 Business Search / Directions 等抽象工具名：
     gaode_mcp             高德 MCP 统一工具（action=around_search, poi_kind=hotel；
                           中心点必须是真实坐标；也提供详情/地理编码/天气/路线）
-    mcp_geocode           地名 → GCJ-02 坐标，用来验证「新发现区域」
     mcp_web_search        查区域背景、商圈、住宿环境
-    mcp_route_matrix      百度路线矩阵（无 transit），用于交通便利度
 
 关键约束写进提示词：酒店字段只能来自工具返回；
 高德的人均价是参考价，不是实时房价；没有房态数据就明确说没有。
@@ -48,16 +46,15 @@ def build_hotel_system_prompt(
     tool_block = render_tool_block(
         tools if tools is not None else profile_specs("hotel_search")
     )
-    has_geocode = "mcp_geocode" in tool_block
-    has_route = "mcp_route_matrix" in tool_block
+    has_gaode = "gaode_mcp" in tool_block
     has_web = "mcp_web_search" in tool_block
 
     geocode_rule = (
-        "- 新区域验证：提出输入里没有的区域时，先用 mcp_geocode 把"
+        "- 新区域验证：提出输入里没有的区域时，先用 gaode_mcp（action=geocode）把"
         "「城市 + 区域名」转成坐标（如「南宁市 青秀区 朝阳广场」）。"
-        "返回的 location.lng / location.lat 就是 gaode_mcp 的"
-        " longitude / latitude；geocode 失败的区域直接放弃，不要猜坐标。\n"
-        if has_geocode
+        "将返回的 location（经度,纬度）拆成 longitude / latitude；"
+        "geocode 失败的区域直接放弃，不要猜坐标。\n"
+        if has_gaode
         else "- 本次没有 geocode 工具：只能围绕入选景点坐标搜索，"
         "并在结论里说明「未验证其他区域」。\n"
     )
@@ -68,10 +65,10 @@ def build_hotel_system_prompt(
         else ""
     )
     route_rule = (
-        "- 交通便利度：只有 mcp_route_matrix 的结果可以写耗时；"
-        "它支持 driving / walking / riding，不支持 transit。"
+        "- 交通便利度：使用 gaode_mcp（action=route），用「经度,纬度」传入起终点。"
+        "route_mode 支持 driving / walking / bicycling / transit，公交路线还需传城市与目的城市。"
         "没有公交/地铁数据时，写「公交耗时未验证」，不要估算。\n"
-        if has_route
+        if has_gaode
         else "- 本次没有路线工具：不要输出任何交通耗时，只描述直线距离关系。\n"
     )
 
@@ -119,9 +116,9 @@ Step 4 搜索酒店
 Step 5 区域比较与收口
 - 比较：到主要景点的距离/耗时、覆盖景点数量、商圈配套、酒店评分分布、参考价。
 - 缺少某项数据就写「未验证」，禁止虚构评分、价格、房态、交通时间。
-- 最后用 Markdown 输出：景点分布判断、候选区域及发现依据、优缺点、区域排序、未核实项。
-- 明确区分「用户给定的景点」与「你新发现的区域」。
-- 不要输出酒店 JSON；酒店明细由系统从 gaode_mcp（poi_kind=hotel）结果统一转成 Hotel schema。
+- 工具只展示少量样例和候选总数，完整酒店由系统保存。
+- 最终只用 1–3 句列出搜过的住宿区域与尚未核实的事项，合计不超过 120 字。
+- 酒店明细与最终排序由系统生成，省略逐家推荐、长篇分析和 JSON。
 """
     return SystemMessage(content=content)
 

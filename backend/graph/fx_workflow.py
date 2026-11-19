@@ -1,6 +1,6 @@
 """FX Rate Agent 的 LangGraph 工作流。
 
-图结构与 Research Agent 一致：agent 与 tools 之间循环，直到 LLM 不再发起 tool_calls。
+图结构：agent 与 tools 之间循环，直到 LLM 不再发起 tool_calls。
 
     START
       │

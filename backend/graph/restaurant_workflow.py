@@ -17,7 +17,7 @@
 import json
 import logging
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
 from langchain_core.messages import (
@@ -52,7 +52,6 @@ _RESTAURANT_POI_KIND = "restaurant"
 _RESTAURANT_TOOL_NAMES = (
     "gaode_mcp",
     "mcp_web_search",
-    "mcp_geocode",
 )
 _DISCOVERY_TOOL = "mcp_web_search"
 # 四个阶段都要检索，轮次比酒店更多，同时保留跑飞保护
@@ -108,7 +107,7 @@ def _restaurants_from_messages(
             continue
         if message.name != _RESTAURANT_TOOL:
             continue
-        payload = _coerce_payload(message.content)
+        payload = _coerce_payload(message.artifact) or _coerce_payload(message.content)
         if payload is None or not payload.get("ok"):
             continue
         if payload.get("action") != _RESTAURANT_ACTION:
@@ -135,7 +134,7 @@ def _tool_warnings(messages: Sequence[BaseMessage]) -> list[str]:
     for message in messages:
         if not isinstance(message, ToolMessage):
             continue
-        payload = _coerce_payload(message.content)
+        payload = _coerce_payload(message.artifact) or _coerce_payload(message.content)
         if payload is not None and payload.get("ok") is False:
             error = payload.get("error") or payload.get("message") or "未知错误"
             warnings.append(f"{message.name or '检索工具'} 调用失败：{error}")
@@ -242,9 +241,11 @@ async def run_restaurant_search(
 
     if tools is None:
         try:
-            tools = build_tools(
-                _RESTAURANT_TOOL_NAMES, tool_context or ToolContext()
+            context = replace(
+                tool_context or ToolContext(),
+                gaode_city=normalized_city, gaode_compact_poi_results=True,
             )
+            tools = build_tools(_RESTAURANT_TOOL_NAMES, context)
         except ValueError as exc:
             logger.warning("餐厅工具不可用：%s", exc)
             tools = []

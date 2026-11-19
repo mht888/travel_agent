@@ -44,14 +44,6 @@ class Settings(BaseSettings):
     baidu_maps_ak: str | None = None
     baidu_place_timeout_seconds: float = Field(10.0, gt=0)
 
-    # --- 百度地图 MCP（只用于路线矩阵 / 天气 / 地理编码）---
-    # 景点检索与详情仍走 Place API v3；MCP 工具直接绑给 Agent，见 tools/baidu_mcp_tools.py
-    baidu_mcp_enabled: bool = True
-    baidu_mcp_timeout_seconds: float = Field(30.0, gt=0)
-    baidu_mcp_startup_timeout_seconds: float = Field(60.0, gt=0)
-    # 同一个 AK 下的并发上限，防止 Agent 并行调工具把配额打满
-    baidu_mcp_max_concurrency: int = Field(4, ge=1, le=20)
-
     # --- 博查 Web Search MCP（Streamable HTTP，只用于时效性网页信息）---
     # 未配置 key 时不会注册工具，见 tools/bocha_mcp_tools.py
     bocha_mcp_enabled: bool = True

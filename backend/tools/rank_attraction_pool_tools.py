@@ -205,7 +205,9 @@ def _build_rank_runnable(settings: Settings) -> Runnable:
         temperature=0.0,
         timeout=settings.attraction_ranking_timeout_seconds,
     )
-    return llm.with_structured_output(_RawRanking, method="json_mode")
+    return llm.with_structured_output(_RawRanking, method="json_mode").with_config(
+        metadata={"usage_stage": "AttractionRanking"}
+    )
 
 
 def create_web_place_ranker(

@@ -35,6 +35,7 @@ from backend.schemas.itinerary import Itinerary
 from backend.schemas.trip import TripRequirements
 from backend.services.attraction_service import AttractionService
 from backend.services.budget_service import BudgetService
+from backend.services.fx_service import FXRateUnavailableError
 from backend.services.itinerary_builder import build_itinerary
 from backend.services.restaurant_service import RestaurantService
 from backend.services.route_service import RouteService
@@ -206,6 +207,8 @@ class ItineraryService:
         # 6. 预算：纯计算，失败也不能拖垮行程（和天气同级别的增强信息）
         try:
             budget_outcome = self._budget.estimate(requirements, itinerary)
+        except FXRateUnavailableError as exc:
+            itinerary.warnings.append(f"预算计算失败：{exc}")
         except Exception as exc:  # noqa: BLE001 - 预算失败必须降级
             logger.warning("预算计算失败，行程将不含费用：%s", exc)
             itinerary.warnings.append(

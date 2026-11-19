@@ -9,7 +9,7 @@
 
 与其他工具的分工：
     城市地点线索（景点/街区/市场等）→ 本工具，由景点初选 Agent 按兴趣检索；
-    坐标、路线、天气 → 百度 MCP。
+    坐标、路线、天气 → 高德 MCP。
 
 传输：
     博查托管的是 Streamable HTTP（https://mcp.bochaai.com/mcp），没有本地子进程，
@@ -28,6 +28,7 @@ from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel, Field
 
 from backend.config import get_settings
+from backend.services.usage import count_external_request
 
 logger = logging.getLogger(__name__)
 
@@ -181,6 +182,7 @@ class BochaMcpClient:
             raise BochaMcpError("博查 MCP 会话不可用", retryable=True)
 
         async with self._semaphore:
+            count_external_request("bocha_mcp")
             try:
                 result = await asyncio.wait_for(
                     session.call_tool(
@@ -618,7 +620,7 @@ def create_bocha_mcp_tools(
     「城市 兴趣 景点 推荐」，不符合直接返回错误让 Agent 重试；
     同一 query 重复检索会自动放大 count（10→20→40→50），
     让「地点不足 → 补检索」循环能拿到新网页；
-    其他画像（research 等）保持自由关键词。
+    其他画像保持自由关键词。
     """
     caller = caller or get_bocha_mcp_client()
     return [

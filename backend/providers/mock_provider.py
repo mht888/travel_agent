@@ -18,6 +18,7 @@ from backend.providers.base import (
     WeatherProvider,
 )
 from backend.schemas.attraction import Attraction, AttractionCategory, OpeningInterval
+from backend.schemas.city import canonical_city_name
 from backend.schemas.common import (
     DataStatus,
     GeoPoint,
@@ -62,7 +63,7 @@ TOKYO_ATTRACTIONS: list[Attraction] = [
     Attraction(
         id="tokyo-sensoji",
         name="Senso-ji Temple",
-        city="Tokyo",
+        city="东京",
         country="Japan",
         category=AttractionCategory.CULTURE,
         tags=["temple", "asakusa", "history"],
@@ -78,7 +79,7 @@ TOKYO_ATTRACTIONS: list[Attraction] = [
     Attraction(
         id="tokyo-meiji-jingu",
         name="Meiji Jingu",
-        city="Tokyo",
+        city="东京",
         country="Japan",
         category=AttractionCategory.CULTURE,
         tags=["shrine", "forest", "shibuya"],
@@ -94,7 +95,7 @@ TOKYO_ATTRACTIONS: list[Attraction] = [
     Attraction(
         id="tokyo-tokyo-tower",
         name="Tokyo Tower",
-        city="Tokyo",
+        city="东京",
         country="Japan",
         category=AttractionCategory.CULTURE,
         tags=["landmark", "viewpoint", "minato"],
@@ -110,7 +111,7 @@ TOKYO_ATTRACTIONS: list[Attraction] = [
     Attraction(
         id="tokyo-teamlab-planets",
         name="teamLab Planets",
-        city="Tokyo",
+        city="东京",
         country="Japan",
         category=AttractionCategory.CULTURE,
         tags=["digital_art", "immersive", "toyosu"],
@@ -126,7 +127,7 @@ TOKYO_ATTRACTIONS: list[Attraction] = [
     Attraction(
         id="tokyo-tsukiji-outer-market",
         name="Tsukiji Outer Market",
-        city="Tokyo",
+        city="东京",
         country="Japan",
         category=AttractionCategory.FOOD,
         tags=["sushi", "seafood", "street_food"],
@@ -142,7 +143,7 @@ TOKYO_ATTRACTIONS: list[Attraction] = [
     Attraction(
         id="tokyo-ichiran-shibuya",
         name="Ichiran Shibuya",
-        city="Tokyo",
+        city="东京",
         country="Japan",
         category=AttractionCategory.FOOD,
         tags=["ramen", "solo_friendly", "shibuya"],
@@ -159,7 +160,7 @@ TOKYO_ATTRACTIONS: list[Attraction] = [
     Attraction(
         id="tokyo-ginza-six",
         name="Ginza Six",
-        city="Tokyo",
+        city="东京",
         country="Japan",
         category=AttractionCategory.SHOPPING,
         tags=["department_store", "luxury", "ginza"],
@@ -175,7 +176,7 @@ TOKYO_ATTRACTIONS: list[Attraction] = [
     Attraction(
         id="tokyo-akihabara-electric-town",
         name="Akihabara Electric Town",
-        city="Tokyo",
+        city="东京",
         country="Japan",
         category=AttractionCategory.SHOPPING,
         tags=["electronics", "anime", "akihabara"],
@@ -191,7 +192,7 @@ TOKYO_ATTRACTIONS: list[Attraction] = [
     Attraction(
         id="tokyo-shinjuku-gyoen",
         name="Shinjuku Gyoen",
-        city="Tokyo",
+        city="东京",
         country="Japan",
         category=AttractionCategory.NATURE,
         tags=["garden", "park", "shinjuku"],
@@ -207,7 +208,7 @@ TOKYO_ATTRACTIONS: list[Attraction] = [
     Attraction(
         id="tokyo-ueno-park",
         name="Ueno Park",
-        city="Tokyo",
+        city="东京",
         country="Japan",
         category=AttractionCategory.NATURE,
         tags=["park", "museum", "ueno"],
@@ -238,7 +239,7 @@ class MockAttractionProvider(AttractionProvider):
         interests: Sequence[str] | None = None,
         limit: int = 20,
     ) -> list[Attraction]:
-        city_key = city.strip().casefold()
+        city_key = canonical_city_name(city).casefold()
         wanted = {
             interest.strip().casefold()
             for interest in (interests or [])
@@ -275,7 +276,7 @@ TOKYO_RESTAURANTS: list[Restaurant] = [
     Restaurant(
         id="tokyo-ichiran-shibuya",
         name="Ichiran Shibuya",
-        city="Tokyo",
+        city="东京",
         country="Japan",
         cuisines=["ramen"],
         description="连锁豚骨拉面，单人隔间座位，适合快速午餐。",
@@ -289,7 +290,7 @@ TOKYO_RESTAURANTS: list[Restaurant] = [
     Restaurant(
         id="tokyo-afuri-ebisu",
         name="Afuri Ebisu",
-        city="Tokyo",
+        city="东京",
         country="Japan",
         cuisines=["ramen"],
         description="柚子盐拉面，汤头清爽。",
@@ -303,7 +304,7 @@ TOKYO_RESTAURANTS: list[Restaurant] = [
     Restaurant(
         id="tokyo-nakiryu-otsuka",
         name="Nakiryu",
-        city="Tokyo",
+        city="东京",
         country="Japan",
         cuisines=["ramen"],
         description="米其林推荐的担担面专门店，饭点排队较长。",
@@ -317,7 +318,7 @@ TOKYO_RESTAURANTS: list[Restaurant] = [
     Restaurant(
         id="tokyo-sushi-dai-toyosu",
         name="Sushi Dai",
-        city="Tokyo",
+        city="东京",
         country="Japan",
         cuisines=["sushi"],
         description="丰洲市场人气寿司店，需要早到取号。",
@@ -331,7 +332,7 @@ TOKYO_RESTAURANTS: list[Restaurant] = [
     Restaurant(
         id="tokyo-uobei-shibuya",
         name="Uobei Shibuya",
-        city="Tokyo",
+        city="东京",
         country="Japan",
         cuisines=["sushi"],
         description="高速传送带寿司，性价比高，翻台快。",
@@ -345,7 +346,7 @@ TOKYO_RESTAURANTS: list[Restaurant] = [
     Restaurant(
         id="tokyo-tsukiji-sushisen",
         name="Tsukiji Sushisen",
-        city="Tokyo",
+        city="东京",
         country="Japan",
         cuisines=["sushi"],
         description="筑地场外市场的寿司老店，午市套餐实惠。",
@@ -359,7 +360,7 @@ TOKYO_RESTAURANTS: list[Restaurant] = [
     Restaurant(
         id="tokyo-tempura-kondo",
         name="Tempura Kondo",
-        city="Tokyo",
+        city="东京",
         country="Japan",
         cuisines=["tempura"],
         description="银座天妇罗名店，午市套餐相对友好。",
@@ -373,7 +374,7 @@ TOKYO_RESTAURANTS: list[Restaurant] = [
     Restaurant(
         id="tokyo-kanda-matsuya",
         name="Kanda Matsuya",
-        city="Tokyo",
+        city="东京",
         country="Japan",
         cuisines=["soba"],
         description="神田老字号荞麦面，木造店铺。",
@@ -387,7 +388,7 @@ TOKYO_RESTAURANTS: list[Restaurant] = [
     Restaurant(
         id="tokyo-maisen-omotesando",
         name="Tonkatsu Maisen",
-        city="Tokyo",
+        city="东京",
         country="Japan",
         cuisines=["tonkatsu"],
         description="表参道炸猪排，黑豚定食是招牌。",
@@ -401,7 +402,7 @@ TOKYO_RESTAURANTS: list[Restaurant] = [
     Restaurant(
         id="tokyo-bills-omotesando",
         name="bills Omotesando",
-        city="Tokyo",
+        city="东京",
         country="Japan",
         cuisines=["cafe", "western"],
         description="澳式早午餐，适合安排轻松的一天。",
@@ -415,7 +416,7 @@ TOKYO_RESTAURANTS: list[Restaurant] = [
     Restaurant(
         id="tokyo-ain-soph-shinjuku",
         name="Ain Soph Journey",
-        city="Tokyo",
+        city="东京",
         country="Japan",
         cuisines=["vegan", "cafe"],
         description="新宿素食餐厅，薄饼和套餐都受欢迎。",
@@ -429,7 +430,7 @@ TOKYO_RESTAURANTS: list[Restaurant] = [
     Restaurant(
         id="tokyo-ginza-kagari",
         name="Ginza Kagari",
-        city="Tokyo",
+        city="东京",
         country="Japan",
         cuisines=["ramen"],
         description="鸡白汤拉面，银座午市排队店。",
@@ -457,7 +458,7 @@ class MockRestaurantProvider(RestaurantProvider):
         cuisines: Sequence[str] | None = None,
         limit: int = 20,
     ) -> list[Restaurant]:
-        city_key = city.strip().casefold()
+        city_key = canonical_city_name(city).casefold()
         wanted = {
             cuisine.strip().casefold()
             for cuisine in (cuisines or [])

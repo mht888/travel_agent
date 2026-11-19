@@ -11,32 +11,24 @@
 3. 未知不等于免费：门票价格为 None 的景点不计入 0，只记 warning。
 
 为什么这里不用 async：
-    整个估算是纯函数式计算，不访问网络和数据库。保持同步更容易测试，
-    也避免调用方误以为这里有 I/O 需要等待。
-    ItineraryService 在组装完之后同步调用它，不增加额外延迟。
+    每次估算同步读取一次已发布的本地汇率快照，其余步骤只做计算。
 """
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from decimal import ROUND_HALF_UP, Decimal
 
 from backend.schemas.budget import BudgetBreakdown, BudgetCategory, BudgetLineItem
+from backend.schemas.city import canonical_city_name
 from backend.schemas.common import DataStatus, Money, TransportMode
 from backend.schemas.itinerary import Itinerary, ItineraryItemType
 from backend.schemas.trip import TravelStyle, TripRequirements
+from backend.services.fx_service import FXRateUnavailableError, SNAPSHOT_MAX_AGE_DAYS, get_fx_service
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_CURRENCY = "USD"
-
-# 固定汇率（1 USD 可兑换多少目标币种）。第一版不接汇率服务：
-# 数值只用于把 Mock 的日元门票折算进美元账本，全部标记为 ESTIMATED。
-_FX_PER_USD: dict[str, Decimal] = {
-    "USD": Decimal("1"),
-    "JPY": Decimal("150"),
-    "CNY": Decimal("7.2"),
-    "EUR": Decimal("0.92"),
-}
 
 _CENT = Decimal("0.01")
 _ZERO = Decimal("0")
@@ -58,7 +50,7 @@ class CostProfile:
 # 第一版只有东京有独立档位，其余城市走默认档。
 # 档位是「量级正确」的估算，不是报价，note 里会写清楚。
 _COST_PROFILES: dict[str, CostProfile] = {
-    "tokyo": CostProfile(
+    "东京": CostProfile(
         flight_per_person=Decimal("450"),
         hotel_per_night=Decimal("140"),
         food_per_person_day=Decimal("55"),
@@ -91,6 +83,7 @@ _OTHER_RATE = Decimal("0.08")
 
 # 已安排餐厅时，日均餐费中剩下早/晚餐的比例（午餐约占 40%）
 _REMAINING_MEAL_RATIO = Decimal("0.6")
+_MEAL_BUDGET_SHARE = {"breakfast": Decimal("0.2"), "dinner": Decimal("0.4")}
 
 
 @dataclass
@@ -110,11 +103,11 @@ def _fmt(value: Decimal) -> str:
 
 
 def _profile_for(destination: str) -> CostProfile:
-    return _COST_PROFILES.get(destination.strip().casefold(), _DEFAULT_PROFILE)
+    return _COST_PROFILES.get(canonical_city_name(destination), _DEFAULT_PROFILE)
 
 
 def _typed_item_cost_usd(
-    itinerary: Itinerary, item_type: ItineraryItemType
+    itinerary: Itinerary, item_type: ItineraryItemType, rates: Mapping[str, Decimal]
 ) -> tuple[Decimal, list[str], int, int]:
     """按行程项类型汇总费用：分组币种 → 折算成 USD。
 
@@ -134,14 +127,15 @@ def _typed_item_cost_usd(
                 unknown += 1
                 continue
             counted += 1
+            quantity = itinerary.trip.travelers if item.meal in _MEAL_BUDGET_SHARE else 1
             per_currency[item.cost.currency] = (
-                per_currency.get(item.cost.currency, _ZERO) + item.cost.amount
+                per_currency.get(item.cost.currency, _ZERO) + item.cost.amount * quantity
             )
 
     total_usd = _ZERO
     parts: list[str] = []
     for currency, amount in sorted(per_currency.items()):
-        total_usd += amount / _FX_PER_USD[currency]
+        total_usd += amount / rates[currency]
         parts.append(f"{_fmt(amount)} {currency}")
 
     return total_usd, parts, unknown, counted
@@ -216,13 +210,31 @@ class BudgetService:
     ) -> BudgetOutcome:
         """把需求与行程翻译成一本账。
 
-        任何一类数据缺失都只降级为 warning，不抛异常：
-        预算算不完整不是「请求失败」，而是「结果要标注」。
+        缺少可信的汇率快照时，由行程编排返回告警。
         """
         ledger = (
             requirements.budget.currency if requirements.budget else DEFAULT_CURRENCY
         )
-        rate = _FX_PER_USD[ledger]
+        fx = get_fx_service()
+        snapshot = fx.load_latest()
+        if snapshot is None:
+            raise FXRateUnavailableError("没有已发布的汇率快照，无法估算预算")
+        if fx.is_stale(snapshot):
+            raise FXRateUnavailableError(f"汇率快照已超过 {SNAPSHOT_MAX_AGE_DAYS} 天未更新")
+        rates = snapshot.rates
+        currencies = {ledger}
+        currencies.update(
+            item.cost.currency
+            for day in itinerary.days
+            for item in day.items
+            if item.cost is not None
+            and item.type in (ItineraryItemType.ATTRACTION, ItineraryItemType.RESTAURANT)
+        )
+        missing = sorted(currencies - rates.keys())
+        if missing:
+            raise FXRateUnavailableError(f"汇率快照缺少币种：{'、'.join(missing)}")
+        rate = rates[ledger]
+        fx_label = f"{snapshot.business_date} 汇率快照（{snapshot.source}）"
         profile = _profile_for(requirements.destination)
         warnings: list[str] = []
 
@@ -240,15 +252,30 @@ class BudgetService:
         )
 
         tickets_usd, ticket_parts, unknown_tickets, _ = _typed_item_cost_usd(
-            itinerary, ItineraryItemType.ATTRACTION
+            itinerary, ItineraryItemType.ATTRACTION, rates
         )
         restaurant_usd, restaurant_parts, unknown_restaurants, restaurant_count = (
-            _typed_item_cost_usd(itinerary, ItineraryItemType.RESTAURANT)
+            _typed_item_cost_usd(itinerary, ItineraryItemType.RESTAURANT, rates)
         )
 
         # 已排餐厅按实际人均消费计入，其余餐食仍按日均估算，
         # 比例取 0.6 代表早/晚餐，避免与午餐重复计算。
-        if restaurant_count:
+        scheduled_meals = [
+            item for day in itinerary.days for item in day.items
+            if item.meal in _MEAL_BUDGET_SHARE
+        ]
+        if scheduled_meals:
+            covered_days = sum(
+                (_MEAL_BUDGET_SHARE[item.meal] for item in scheduled_meals if item.cost is not None),
+                _ZERO,
+            )
+            remaining_food = daily_food * travelers * (duration - covered_days)
+            food_usd = restaurant_usd + remaining_food
+            food_note = (
+                f"{restaurant_count} 顿已知人均价按 {travelers} 人计入，"
+                f"其余餐食及价格未知的餐食按档位估算 {_fmt(remaining_food)} USD"
+            )
+        elif restaurant_count:
             remaining_food = (
                 daily_food * _REMAINING_MEAL_RATIO * duration * travelers
             )
@@ -286,14 +313,14 @@ class BudgetService:
         ):
             warnings.append(
                 f"门票原始价为 {'、'.join(ticket_parts)}，"
-                f"已按固定汇率折算为 {ledger}，金额为估算值"
+                f"已按 {fx_label} 折算为 {ledger}，金额为估算值"
             )
         if restaurant_parts and any(
             not part.endswith(ledger) for part in restaurant_parts
         ):
             warnings.append(
                 f"餐厅原始价为 {'、'.join(restaurant_parts)}，"
-                f"已按固定汇率折算为 {ledger}，金额为估算值"
+                f"已按 {fx_label} 折算为 {ledger}，金额为估算值"
             )
         if missing_distance:
             warnings.append(
@@ -361,6 +388,8 @@ class BudgetService:
             # 用户没给预算就传 None：不替用户假设一个上限
             budget_limit=requirements.budget,
         )
+        if ledger != "USD":
+            warnings.append(f"预算使用 {fx_label}，1 USD = {rate:f} {ledger}")
         logger.info(
             "预算估算完成：%d 类，合计 %s %s",
             len(lines),
@@ -381,7 +410,7 @@ class BudgetService:
         """生成一条预算条目：统一折算到账本币种，并标注汇率。"""
         amount = (amount_usd * rate).quantize(_CENT, rounding=ROUND_HALF_UP)
         if ledger != "USD":
-            note = f"{note}；按 1 USD={_fmt(rate)} {ledger} 折算"
+            note = f"{note}；按 1 USD={rate:f} {ledger} 折算"
         return BudgetLineItem(
             category=category,
             label=label,

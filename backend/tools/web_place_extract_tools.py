@@ -123,9 +123,8 @@ class PlaceAliasResolver(Protocol):
 
 class _RawPlace(BaseModel):
     name: str = ""
-    description: str = ""
     category: str = ""
-    source_url: str = ""
+    source_index: int = 0
 
 
 class _RawPlaces(BaseModel):
@@ -177,11 +176,12 @@ def build_extract_prompt(
 5. category 只能取以下值之一：
    culture / food / shopping / nature / outdoor_activity / nightlife /
    entertainment / landmark / wellness / art / other
-6. description 用一句中文概括摘要里与该地点有关的信息，不要照抄整段。
+6. source_index 填实际提到该地点的网页编号，编号从 1 开始；省略简介和 URL。
+7. 优先使用来源明确出现的当地名称；中国境内地点有中文原名时保留中文，避免翻译造成地图误匹配。
 
 ## 输出格式
 只输出一个 JSON 对象，不要 markdown 代码块、不要解释文字：
-{{"items": [{{"name": "地点名", "description": "一句介绍", "category": "food", "source_url": "https://..."}}]}}
+{{"items": [{{"name": "地点名", "category": "food", "source_index": 1}}]}}
 """
 
 
@@ -221,7 +221,7 @@ class LLMWebPlaceExtractor:
             logger.warning("网页地点抽取结果无法解析：%s", exc)
             raise RuntimeError(f"网页地点抽取结果无法解析：{exc}") from exc
 
-        return self._dedupe(city, raw_places, limit)
+        return self._dedupe(city, raw_places, results, limit)
 
     @staticmethod
     def _parse(raw: Any) -> list[_RawPlace]:
@@ -241,26 +241,32 @@ class LLMWebPlaceExtractor:
     def _dedupe(
         city: str,
         raw_places: Sequence[_RawPlace],
+        results: Sequence[dict[str, Any]],
         limit: int,
     ) -> list[ExtractedPlace]:
         seen: set[str] = set()
         places: list[ExtractedPlace] = []
         for raw in raw_places:
             name = raw.name.strip()
-            if not name or _looks_generic(name):
+            if not name or _looks_generic(name) or not 1 <= raw.source_index <= len(results):
                 continue
             key = normalize_name(name)
             if key in seen:
                 continue
             seen.add(key)
+            source = results[raw.source_index - 1]
+            snippet = str(source.get("snippet") or source.get("title") or "").strip()
+            mention = snippet.find(name)
+            if mention >= 0:
+                snippet = snippet[max(0, mention - 25):]
             places.append(
                 ExtractedPlace(
                     id=make_place_id(city, name),
                     name=name,
-                    description=raw.description.strip()[:160],
+                    description=snippet[:160],
                     city=city,
                     category=_coerce_category(raw.category),
-                    source_url=raw.source_url.strip() or None,
+                    source_url=str(source.get("url") or "").strip() or None,
                 )
             )
             if len(places) >= limit:
@@ -550,7 +556,9 @@ def _build_extract_runnable(settings: Settings) -> Runnable:
         temperature=0.0,
         timeout=settings.attraction_ranking_timeout_seconds,
     )
-    return llm.with_structured_output(_RawPlaces, method="json_mode")
+    return llm.with_structured_output(_RawPlaces, method="json_mode").with_config(
+        metadata={"usage_stage": "WebPlaceExtraction"}
+    )
 
 
 def _build_alias_runnable(settings: Settings) -> Runnable:
@@ -563,7 +571,9 @@ def _build_alias_runnable(settings: Settings) -> Runnable:
         temperature=0.0,
         timeout=settings.attraction_ranking_timeout_seconds,
     )
-    return llm.with_structured_output(_RawMergeGroups, method="json_mode")
+    return llm.with_structured_output(_RawMergeGroups, method="json_mode").with_config(
+        metadata={"usage_stage": "WebPlaceDeduplication"}
+    )
 
 
 def create_web_place_extractor(

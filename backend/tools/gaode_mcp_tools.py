@@ -40,6 +40,7 @@ import asyncio
 import json
 import logging
 import math
+from collections import deque
 from contextlib import suppress
 from typing import Any, Literal, Protocol
 
@@ -49,6 +50,7 @@ from pydantic import BaseModel, Field
 
 from backend.config import Settings, get_settings
 from backend.schemas.common import GeoPoint
+from backend.services.usage import count_external_request
 from backend.tools.tool_results import (
     dump_payload,
     error_result,
@@ -63,8 +65,7 @@ _DEFAULT_URL = "https://mcp.amap.com/mcp"
 # 高德对免费 Key 有 QPS 限制；详情补齐是 N+1 调用，命中限流时退避重试。
 _QPS_HINT = "CUQPS_HAS_EXCEEDED_THE_LIMIT"
 _MAX_QPS_RETRIES = 2
-# 详情是 N+1 调用，按固定间隔串行补齐，避免短时间超过高德 QPS 限制。
-_DETAIL_INTERVAL_SECONDS = 0.25
+_MAX_REQUESTS_PER_SECOND = 3
 
 # typecode 前缀：100* = 住宿服务，05* = 餐饮服务
 _POI_KIND_PREFIX = {"hotel": "100", "restaurant": "05"}
@@ -130,17 +131,23 @@ class GaodeMcpClient:
         self._ready = asyncio.Event()
         self._stop = asyncio.Event()
         self._start_lock = asyncio.Lock()
-        # 详情接口单独做全局限速：并发搜索时也不会瞬间打满 QPS
-        self._detail_lock = asyncio.Lock()
-        self._detail_last_call = 0.0
+        self._city_lock = asyncio.Lock()
+        self._city_codes: dict[str, str] = {}
+        self._rate_lock = asyncio.Lock()
+        self._request_times: deque[float] = deque()
 
-    async def _pace_detail(self) -> None:
-        async with self._detail_lock:
+    async def _pace_request(self) -> None:
+        """同一 MCP 客户端的所有请求共用一个滚动窗口。"""
+        async with self._rate_lock:
             loop = asyncio.get_running_loop()
-            wait = _DETAIL_INTERVAL_SECONDS - (loop.time() - self._detail_last_call)
-            if wait > 0:
-                await asyncio.sleep(min(wait, _DETAIL_INTERVAL_SECONDS))
-            self._detail_last_call = loop.time()
+            while True:
+                now = loop.time()
+                while self._request_times and now - self._request_times[0] >= 1:
+                    self._request_times.popleft()
+                if len(self._request_times) < _MAX_REQUESTS_PER_SECOND:
+                    self._request_times.append(now)
+                    return
+                await asyncio.sleep(self._request_times[0] + 1 - now)
 
     def _endpoint(self) -> str:
         """高德托管端点把 key 放在 query 上，不是 Authorization 头。"""
@@ -214,51 +221,75 @@ class GaodeMcpClient:
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
         if not self._api_key:
             raise GaodeMcpError("GAODE_MAPS_AK 未配置，无法调用高德 MCP")
-        await self._ensure_started()
-        session = self._session
-        if session is None:
-            raise GaodeMcpError("高德 MCP 会话不可用", retryable=True)
+        scoped = dict(arguments)
+        for field in ("city", "cityd"):
+            if city := scoped.get(field):
+                scoped[field] = await self._city_code(city)
+        return await self._call_remote(name, scoped)
 
-        for attempt in range(_MAX_QPS_RETRIES + 1):
-            if name == "maps_search_detail":
-                await self._pace_detail()
-            async with self._semaphore:
-                try:
-                    result = await asyncio.wait_for(
-                        session.call_tool(
-                            name,
-                            arguments,
-                            read_timeout_seconds=self._timeout,
-                        ),
-                        self._timeout + 5,
-                    )
-                except asyncio.TimeoutError as exc:
-                    raise GaodeMcpError(
-                        f"高德 MCP {name} 超时（{self._timeout:.0f}s）",
-                        retryable=True,
-                    ) from exc
-                except Exception as exc:  # noqa: BLE001
-                    # 会话是否健康由 _serve 的退出逻辑判断；这里只把错误翻译给 Agent。
-                    raise GaodeMcpError(
-                        f"高德 MCP {name} 调用失败：{type(exc).__name__}: {exc}",
-                        retryable=True,
-                    ) from exc
+    async def _city_code(self, city: str) -> str:
+        city = city.strip()
+        if len(city) == 6 and city.isascii() and city.isdigit():
+            return city
+        key = city.casefold()
+        async with self._city_lock:
+            if key not in self._city_codes:
+                result = await self._call_remote("maps_geo", {"address": city})
+                adcode = parse_city_adcode(result)
+                if adcode is None:
+                    raise GaodeMcpError(f"无法确认「{city}」的高德行政区代码")
+                self._city_codes[key] = adcode
+            return self._city_codes[key]
 
-            payload = _result_payload(result)
-            if not getattr(result, "is_error", False):
-                return payload
+    async def _dispatch(self, session: Any, name: str, arguments: dict[str, Any]) -> Any:
+        async with self._semaphore:
+            await self._pace_request()
+            count_external_request("gaode_mcp")
+            try:
+                return await asyncio.wait_for(
+                    session.call_tool(name, arguments, read_timeout_seconds=self._timeout),
+                    self._timeout + 5,
+                )
+            except asyncio.TimeoutError as exc:
+                raise GaodeMcpError(
+                    f"高德 MCP {name} 超时（{self._timeout:.0f}s）", retryable=True,
+                ) from exc
+            except Exception as exc:
+                raise GaodeMcpError(
+                    f"高德 MCP {name} 调用失败：{type(exc).__name__}: {exc}",
+                    retryable=True,
+                ) from exc
 
-            message = str(payload)
-            # 高德的 QPS 是硬限流：退避后重试，比把空字段交给下游更有价值。
-            if _QPS_HINT in message and attempt < _MAX_QPS_RETRIES:
-                await asyncio.sleep(1.0 + attempt * 0.5)
-                continue
-            raise GaodeMcpError(
-                f"高德 MCP {name} 返回错误：{message}",
-                retryable=_QPS_HINT in message,
-            )
-
-        raise GaodeMcpError(f"高德 MCP {name} 调用失败", retryable=True)
+    async def _call_remote(self, name: str, arguments: dict[str, Any]) -> Any:
+        reconnect = True
+        qps_retries = 0
+        while True:
+            await self._ensure_started()
+            session = self._session
+            if session is None:
+                raise GaodeMcpError("高德 MCP 会话不可用", retryable=True)
+            try:
+                result = await self._dispatch(session, name, arguments)
+                payload = _result_payload(result)
+                if not (getattr(result, "is_error", False) or getattr(result, "isError", False)):
+                    return payload
+                message = str(payload)
+                raise GaodeMcpError(
+                    f"高德 MCP {name} 返回错误：{message}",
+                    retryable=_QPS_HINT in message or "connection closed" in message.casefold(),
+                )
+            except GaodeMcpError as exc:
+                message = str(exc)
+                if reconnect and "connection closed" in message.casefold():
+                    reconnect = False
+                    async with self._start_lock:
+                        if self._session is session:
+                            await self.aclose()
+                elif _QPS_HINT in message and qps_retries < _MAX_QPS_RETRIES:
+                    await asyncio.sleep(1.0 + qps_retries * 0.5)
+                    qps_retries += 1
+                else:
+                    raise
 
     async def aclose(self) -> None:
         self._stop.set()
@@ -375,6 +406,46 @@ def _parse_lng_lat(value: Any) -> GeoPoint | None:
         return None
 
 
+def parse_city_adcode(payload: Any) -> str | None:
+    """只接受地理编码返回的市级行政区代码。"""
+    if not isinstance(payload, dict):
+        return None
+    rows = payload.get("results") or payload.get("geocodes")
+    if not isinstance(rows, list):
+        return None
+    codes = set()
+    for row in rows:
+        if isinstance(row, dict) and row.get("level") in {"市", "直辖市", "地级市"}:
+            code = str(row.get("adcode") or "")
+            if len(code) == 6 and code.isascii() and code.isdigit():
+                codes.add(code)
+    return next(iter(codes)) if len(codes) == 1 else None
+
+
+def parse_geocode_location(payload: Any, *, precise: bool = False) -> GeoPoint | None:
+    """取地理编码返回的首个有效 GCJ-02 坐标。"""
+    if not isinstance(payload, dict):
+        return None
+    location = _parse_lng_lat(payload.get("location"))
+    if location is not None:
+        return location
+    # MCP 的 maps_geo 使用 results，兼容返回 geocodes 的调用方。
+    for key in ("results", "geocodes"):
+        candidates = payload.get(key)
+        if not isinstance(candidates, list):
+            continue
+        for candidate in candidates:
+            if isinstance(candidate, dict):
+                if precise and candidate.get("level") not in (
+                    None, "兴趣点", "门牌号", "单元号", "楼层", "房间号"
+                ):
+                    continue
+                location = _parse_lng_lat(candidate.get("location"))
+                if location is not None:
+                    return location
+    return None
+
+
 def _photo_url(poi: dict[str, Any]) -> str | None:
     photo = poi.get("photo")
     if isinstance(photo, str) and photo.strip():
@@ -389,7 +460,7 @@ def _photo_url(poi: dict[str, Any]) -> str | None:
     return None
 
 
-def _haversine_meters(center: GeoPoint, point: GeoPoint) -> int:
+def haversine_meters(center: GeoPoint, point: GeoPoint) -> int:
     """两点球面距离（米）。高德 MCP 不返回 distance，只能自己按坐标算。"""
     radius = 6371000.0
     lat1, lat2 = math.radians(center.lat), math.radians(point.lat)
@@ -427,10 +498,10 @@ def _light_summary(poi: dict[str, Any]) -> PoiSummary | None:
     )
 
 
-def _detail_summary(
+def build_poi_detail_summary(
     poi: dict[str, Any],
     detail: dict[str, Any] | None,
-    center: GeoPoint | None,
+    center: GeoPoint | None = None,
 ) -> PoiSummary | None:
     """用周边搜索的轻量条目 + 详情结果拼成完整条目。"""
     base = _light_summary(poi)
@@ -459,7 +530,7 @@ def _detail_summary(
         or None,
         location=location,
         distance_meters=(
-            _haversine_meters(center, location)
+            haversine_meters(center, location)
             if center is not None and location is not None
             else None
         ),
@@ -753,7 +824,7 @@ async def _around_response(
             )
             details.append(detail)
         for poi, detail in zip(filtered, details):
-            summary = _detail_summary(poi, detail, center)
+            summary = build_poi_detail_summary(poi, detail, center)
             if summary is not None:
                 summaries.append(summary)
 
@@ -827,6 +898,8 @@ def create_gaode_mcp_tool(
     *,
     caller: McpToolCaller | None = None,
     settings: Settings | None = None,
+    default_city: str | None = None,
+    compact_poi_results: bool = False,
 ) -> BaseTool:
     """构建唯一的 gaode_mcp 工具。
 
@@ -871,8 +944,8 @@ def create_gaode_mcp_tool(
             latitude=latitude,
             radius=radius,
             limit=limit,
-            city=city,
-            city_limit=city_limit,
+            city=(default_city or city) if action in {"text_search", "geocode", "weather"} else city,
+            city_limit=city_limit or (action == "text_search" and bool(default_city)),
             poi_id=poi_id,
             address=address,
             origin=origin,
@@ -919,8 +992,45 @@ def create_gaode_mcp_tool(
             }
         )
 
+    async def _compact_run(**arguments):
+        raw = await _run(**arguments)
+        payload = json.loads(raw)
+        if payload.get("ok") and payload.get("action") in {"around_search", "text_search", "poi_detail"}:
+            fields = (
+                "id", "name", "type", "typecode", "district", "business_area",
+                "rating", "average_cost_cny", "opening_hours_today",
+            )
+            compact = {
+                key: payload[key] for key in
+                ("ok", "action", "poi_kind", "center", "radius_meters", "keywords", "city", "source")
+                if key in payload
+            }
+            if payload["action"] == "poi_detail":
+                detail = payload.get("data")
+                if isinstance(detail, dict):
+                    compact["data"] = {
+                        key: detail[key] for key in (*fields, "address", "location", "cost", "open_time")
+                        if key in detail
+                    }
+                else:
+                    return raw, payload
+            else:
+                items = payload.get("items") or []
+                compact["total"] = len(items)
+                compact["items"] = [
+                    {key: row[key] for key in fields if key in row}
+                    for row in items[:3]
+                ]
+                # 关键词检索的地址可区分同名门店。
+                if payload["action"] == "text_search":
+                    for sample, row in zip(compact["items"], items):
+                        if row.get("address"):
+                            sample["address"] = row["address"]
+            return dump_payload(compact), payload
+        return raw, payload
+
     return StructuredTool.from_function(
-        coroutine=_run,
+        coroutine=_compact_run if compact_poi_results else _run,
         name="gaode_mcp",
         description=(
             "高德地图 MCP 统一入口，一个工具覆盖高德 MCP Server 全部能力。"
@@ -935,6 +1045,7 @@ def create_gaode_mcp_tool(
         ),
         args_schema=GaodeMcpInput,
         handle_validation_error=handle_validation_error,
+        response_format="content_and_artifact" if compact_poi_results else "content",
     )
 
 
@@ -942,9 +1053,14 @@ def create_gaode_mcp_tools(
     *,
     caller: McpToolCaller | None = None,
     settings: Settings | None = None,
+    default_city: str | None = None,
+    compact_poi_results: bool = False,
 ) -> list[BaseTool]:
     """registry 入口：与其他分组保持「工厂返回列表」的形状。"""
-    return [create_gaode_mcp_tool(caller=caller, settings=settings)]
+    return [create_gaode_mcp_tool(
+        caller=caller, settings=settings, default_city=default_city,
+        compact_poi_results=compact_poi_results,
+    )]
 
 
 __all__ = [

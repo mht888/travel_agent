@@ -18,14 +18,12 @@ from backend.api.fx import router as fx_router
 from backend.api.flights import router as flights_router
 from backend.api.health import router as health_router
 from backend.api.trip import requirements_router
-from backend.api.trip import research_router
 from backend.api.trip import plan_router
 from backend.api.trip import restaurant_router
 from backend.api.trip import router as trip_router
 from backend.config import get_settings
 from backend.errors import TravelAgentError
 from backend.scheduler import build_scheduler, run_startup_catch_up
-from backend.tools.baidu_mcp_tools import close_baidu_mcp_client
 from backend.tools.bocha_mcp_tools import close_bocha_mcp_client
 from backend.tools.gaode_mcp_tools import close_gaode_mcp_client
 
@@ -65,8 +63,6 @@ def create_app() -> FastAPI:
             if scheduler is not None:
                 scheduler.shutdown(wait=False)
                 app.state.fx_scheduler = None
-            # MCP Server 是 npx 长驻子进程，退出时显式收掉
-            await close_baidu_mcp_client()
             # 博查是远程 Streamable HTTP 会话，退出时结束会话
             await close_bocha_mcp_client()
             # 高德同为远程 Streamable HTTP 会话，退出时结束
@@ -94,7 +90,6 @@ def create_app() -> FastAPI:
     app.include_router(trip_router, prefix=settings.api_prefix)
     app.include_router(restaurant_router, prefix=settings.api_prefix)
     app.include_router(requirements_router, prefix=settings.api_prefix)
-    app.include_router(research_router, prefix=settings.api_prefix)
     app.include_router(plan_router, prefix=settings.api_prefix)
 
     @app.exception_handler(TravelAgentError)

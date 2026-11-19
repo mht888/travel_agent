@@ -1,9 +1,5 @@
 """行程排程 Agent（第 7 阶段）。
 
-和 Research Agent 的分工：
-    Research Agent    bind_tools + 自主循环        → 文本情报
-    Planner Agent     with_structured_output + 单次 → 结构化排程草稿
-
 为什么 Planner 不用 bind_tools：
     排程需要的全部数据（候选景点、交通矩阵、天气）在调用前已经一次性拿到，
     LLM 不需要再决定「查什么」，只需要决定「怎么组合」。
@@ -129,11 +125,15 @@ def _summarize_matrix(
 
 def _summarize_weather(weather: WeatherForecast | None) -> str:
     if weather is None or not weather.days:
-        return "未查询（用户未提供出发日期）"
+        return "暂无可用天气预报"
     return "\n".join(
         f"- {day.date}: {day.condition.value}，"
         f"{day.temp_min_c:.0f}~{day.temp_max_c:.0f}℃，"
-        f"降水概率 {day.precipitation_probability}%"
+        + (
+            f"降水概率 {day.precipitation_probability}%"
+            if day.precipitation_probability is not None
+            else "降水概率未知"
+        )
         for day in weather.days
     )
 
@@ -218,7 +218,7 @@ def build_planner_prompt(
 ## 候选景点（已按兴趣命中与评分排序）
 {candidate_lines}
 
-## 步行耗时较短的景点对（来自路线矩阵，单位分钟）
+## 耗时较短的景点对（出行方式：{matrix.mode.value}，单位分钟）
 {_summarize_matrix(matrix, valid_ids)}
 
 ## 天气
@@ -227,12 +227,16 @@ def build_planner_prompt(
 ## 排程原则（按优先级）
 1. 同一天尽量安排地理集中的景点：优先把上面「耗时短」的景点对放在同一天。
 2. 兴趣匹配优先于评分：用户明确喜欢的类别优先入选。
-3. 遵守节奏：{requirements.travel_style.value} 的用户不要塞满，留出休息和用餐时间。
+3. 遵守节奏：{requirements.travel_style.value} 的用户不要塞满。日间游览按 09:00 至 19:00 规划，
+   把游玩时长、相邻景点的有向交通耗时和用餐时间都算进去。优先使用上面明确列出的路线，
+   对未列出的路段不要假定可快速到达；如果当天时间不足，少选一个景点。
 4. 户外与自然类景点优先安排在降水概率低的日期。
+5. 夜市、以夜间营业为主的小吃街、夜景和夜游项目安排在当天末尾，
+   把这些 ID 同时写入 evening_attraction_ids，按 18:00 至 21:00 游览估算时间。
 
 ## 输出要求
 只输出一个 JSON 对象，不要 markdown 代码块，不要任何解释文字，结构必须是：
-{{"days": [{{"day_index": 1, "attraction_ids": ["景点id1", "景点id2"], "theme": "当天主题"}}], "rationale": "一句话说明整体思路"}}
+{{"days": [{{"day_index": 1, "attraction_ids": ["景点id1", "景点id2"], "evening_attraction_ids": [], "theme": "当天主题"}}], "rationale": "一句话说明整体思路"}}
 其中 days 必须正好 {requirements.duration_days} 条，attraction_ids 只能用上面的 id。
 """
 
@@ -261,6 +265,10 @@ def create_planner_runnable(settings: Settings) -> Runnable:
     return llm.with_structured_output(ItineraryDraft, method="json_mode")
 
 
+class _InvalidPlannerDraft(ValueError):
+    """草稿违反了本次请求的排程约束。"""
+
+
 class LlmItineraryPlanner:
     """LLM 排程；失败时降级到规则排程，并把降级原因透传给用户。"""
 
@@ -281,13 +289,34 @@ class LlmItineraryPlanner:
         weather: WeatherForecast | None = None,
         today: date | None = None,
     ) -> PlannerOutcome:
-        prompt = build_planner_prompt(requirements, candidates, matrix, weather)
+        valid_ids = {item.id for item in candidates}
+        if len(valid_ids) < requirements.duration_days:
+            return await self._fallback.plan(
+                requirements=requirements,
+                candidates=candidates,
+                matrix=matrix,
+                weather=weather,
+                today=today,
+            )
 
+        prompt = build_planner_prompt(requirements, candidates, matrix, weather)
         try:
             raw = await self._runnable.ainvoke(prompt)
             # 结构化输出正常返回 ItineraryDraft；这里再兜一次，防止不同
             # 兼容端点返回 dict。校验失败同样进入降级。
             draft = ItineraryDraft.model_validate(raw)
+            if len(draft.days) != requirements.duration_days:
+                raise _InvalidPlannerDraft(
+                    f"应安排 {requirements.duration_days} 天，实际安排了 {len(draft.days)} 天"
+                )
+            daily_limit = DAILY_LIMITS[requirements.travel_style]
+            for day in draft.days:
+                if len(day.attraction_ids) > daily_limit:
+                    raise _InvalidPlannerDraft(
+                        f"第 {day.day_index} 天超过 {daily_limit} 个景点的上限"
+                    )
+                if not valid_ids.issuperset(day.attraction_ids):
+                    raise _InvalidPlannerDraft(f"第 {day.day_index} 天引用了候选集外的景点")
         except NotImplementedError:
             # TODO 未完成属于开发期错误，不吞掉，直接往上抛方便你定位
             raise
@@ -300,9 +329,8 @@ class LlmItineraryPlanner:
                 weather=weather,
                 today=today,
             )
-            outcome.warnings.insert(
-                0, f"LLM 排程失败，已降级为规则排程：{type(exc).__name__}"
-            )
+            reason = str(exc) if isinstance(exc, _InvalidPlannerDraft) else type(exc).__name__
+            outcome.warnings.insert(0, f"LLM 排程失败，已降级为规则排程：{reason}")
             return outcome
 
         logger.info("LLM 排程完成：%d 天", len(draft.days))
@@ -310,7 +338,7 @@ class LlmItineraryPlanner:
 
 
 class RuleBasedItineraryPlanner:
-    """规则排程：按候选顺序每天切片。
+    """规则排程：保留候选顺序，尽量均匀分配到每天。
 
     作为降级路径和 Benchmark 的 Baseline，不做地理聚类
     （那是第 10 阶段 Route Optimizer 的职责）。
@@ -331,22 +359,30 @@ class RuleBasedItineraryPlanner:
         daily_limit = DAILY_LIMITS[requirements.travel_style]
         warnings = ["当前使用规则排程，同一天景点的地理集中度不做保证"]
 
+        candidate_ids = list(dict.fromkeys(item.id for item in candidates))
+        scheduled_days = min(requirements.duration_days, len(candidate_ids))
+        scheduled_count = min(len(candidate_ids), scheduled_days * daily_limit)
+        per_day, extra = divmod(scheduled_count, scheduled_days)
+        if scheduled_days < requirements.duration_days:
+            warnings.append(
+                f"候选景点不足：计划 {requirements.duration_days} 天，"
+                f"仅能安排 {scheduled_days} 天"
+            )
+
         days: list[DayPlan] = []
         cursor = 0
-        for day_index in range(1, requirements.duration_days + 1):
-            chunk = list(candidates[cursor : cursor + daily_limit])
-            if not chunk:
-                break
-            cursor += len(chunk)
+        for day_index in range(1, scheduled_days + 1):
+            end = cursor + per_day + (day_index <= extra)
             days.append(
                 DayPlan(
                     day_index=day_index,
-                    attraction_ids=[item.id for item in chunk],
+                    attraction_ids=candidate_ids[cursor:end],
                     theme=None,
                 )
             )
+            cursor = end
 
-        dropped = len(candidates) - cursor
+        dropped = len(candidate_ids) - scheduled_count
         if dropped > 0:
             warnings.append(f"{dropped} 个候选景点因天数/节奏限制未纳入行程")
 

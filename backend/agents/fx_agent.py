@@ -77,7 +77,7 @@ def build_system_prompt(tools: Sequence[Any] | None = None) -> str:
 def create_fx_agent(tools: list[BaseTool] | None = None) -> Runnable:
     """创建绑定了汇率工具的 LLM Runnable。
 
-    与 Research Agent 一致：Tool Calling 必须有 LLM，缺 key 时抛 ValueError，
+    Tool Calling 必须有 LLM，缺 key 时抛 ValueError，
     由 workflow 决定是否降级为确定性流程。
     """
     settings = get_settings()

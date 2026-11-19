@@ -5,11 +5,13 @@ from datetime import date as Date
 from datetime import time
 from decimal import Decimal
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
 from backend.schemas.budget import BudgetBreakdown
 from backend.schemas.common import DataStatus, Money, Provenance, TransportMode
+from backend.schemas.hotel import Hotel
 from backend.schemas.trip import TripRequirements
 
 
@@ -57,6 +59,8 @@ class ItineraryItem(BaseModel):
     type: ItineraryItemType
     name: str
     attraction_id: str | None = Field(None, description="指向 Attraction.id，便于回查")
+    restaurant_id: str | None = None
+    meal: Literal["breakfast", "dinner"] | None = None
     start_time: time
     end_time: time
     cost: Money | None = None
@@ -120,6 +124,8 @@ class Itinerary(BaseModel):
 
     trip: TripRequirements
     days: list[ItineraryDay] = Field(default_factory=list)
+    hotels: list[Hotel] = Field(default_factory=list)
+    hotel_summary: str | None = None
     budget: BudgetBreakdown | None = Field(
         None, description="六类费用账本；第 8 阶段由 BudgetService 填充"
     )

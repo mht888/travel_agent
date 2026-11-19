@@ -10,12 +10,29 @@ typecode 只保留在 Tool 层用于排查，不进入业务实体。
 """
 
 import re
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
-from backend.schemas.common import DataStatus, Money, Provenance
+from backend.schemas.common import DataStatus, GeoPoint, Money, Provenance
 from backend.schemas.hotel import Hotel, HotelCategory
-from backend.tools.gaode_mcp_tools import HotelSummary
+from backend.tools.gaode_mcp_tools import HotelSummary, haversine_meters
+
+
+def select_top_hotels(hotels: Sequence[Hotel], attractions: Sequence[GeoPoint]) -> list[Hotel]:
+    """按用户评分和到已安排行程景点的平均直线距离选出最多五家。"""
+    def score(hotel: Hotel) -> tuple[bool, float, int, str]:
+        proximity = 0.0
+        if not attractions:
+            proximity = 1.0
+        elif hotel.location is not None:
+            average_meters = sum(haversine_meters(hotel.location, point) for point in attractions)
+            average_meters /= len(attractions)
+            proximity = 1 / (1 + average_meters / 3000)
+        combined = 0.8 * (hotel.rating or 0) / 5 + 0.2 * proximity
+        return hotel.rating is None, -combined, -(hotel.review_count or 0), hotel.id
+
+    return sorted(hotels, key=score)[:5]
 
 _STAR_PATTERN = re.compile(r"([一二三四五1-5])星级")
 _STAR_VALUES = {

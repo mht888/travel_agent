@@ -15,7 +15,7 @@ enabled() 是纯函数，只看 settings，不建连接——提示词渲染和�
 典型用法：
     from backend.tools.registry import ToolContext, get_profile_tools, render_tool_block
 
-    tools = get_profile_tools("research")
+    tools = get_profile_tools("hotel_search")
     prompt = f"可用工具：\\n{render_tool_block(tools)}"
 
 新增工具的流程：
@@ -37,10 +37,6 @@ from backend.config import get_settings
 
 def _always(_settings: Any) -> bool:
     return True
-
-
-def _baidu_mcp_enabled(settings: Any) -> bool:
-    return bool(getattr(settings, "baidu_mcp_enabled", False))
 
 
 def _bocha_enabled(settings: Any) -> bool:
@@ -84,9 +80,10 @@ class ToolContext:
     bocha_result_cache: Any = None
     strict_web_query: bool = False
     fx_service: Any = None
-    baidu_mcp_caller: Any = None
     bocha_caller: Any = None
     gaode_mcp_caller: Any = None
+    gaode_city: str | None = None
+    gaode_compact_poi_results: bool = False
 
 
 # ---------------------------- 工具清单 ----------------------------
@@ -112,25 +109,6 @@ TOOL_SPECS: dict[str, ToolSpec] = {
         name="get_weather",
         group="travel",
         prompt_hint="查询城市天气",
-    ),
-    # 百度地图 MCP（随 baidu_mcp_enabled 开关）
-    "mcp_route_matrix": ToolSpec(
-        name="mcp_route_matrix",
-        group="baidu_mcp",
-        prompt_hint="百度路线矩阵（driving / walking / riding / motorcycle，不支持 transit）",
-        enabled=_baidu_mcp_enabled,
-    ),
-    "mcp_weather": ToolSpec(
-        name="mcp_weather",
-        group="baidu_mcp",
-        prompt_hint="百度天气（行政区划代码或 GCJ-02 坐标）",
-        enabled=_baidu_mcp_enabled,
-    ),
-    "mcp_geocode": ToolSpec(
-        name="mcp_geocode",
-        group="baidu_mcp",
-        prompt_hint="地址或地名转换为 GCJ-02 坐标",
-        enabled=_baidu_mcp_enabled,
     ),
     # 博查网页搜索（需要 key）
     "mcp_web_search": ToolSpec(
@@ -201,16 +179,6 @@ TOOL_SPECS: dict[str, ToolSpec] = {
 # ---------------------------- Agent 工具画像 ----------------------------
 
 TOOL_PROFILES: dict[str, tuple[str, ...]] = {
-    "research": (
-        "search_attractions",
-        "get_attraction_details",
-        "get_route_matrix",
-        "get_weather",
-        "mcp_route_matrix",
-        "mcp_weather",
-        "mcp_geocode",
-        "mcp_web_search",
-    ),
     # 景点初选：网页检索 → 地点抽取 → 按兴趣排序
     "attraction_selection": (
         "mcp_web_search",
@@ -220,14 +188,12 @@ TOOL_PROFILES: dict[str, tuple[str, ...]] = {
     # 酒店搜索：先验证候选区域（geocode / 网页），再搜酒店与交通
     "hotel_search": (
         "gaode_mcp",
-        "mcp_geocode",
         "mcp_web_search",
     ),
     # 餐厅搜索：网页发现美食与门店 + 高德商家核实 + 地名坐标校验
     "restaurant_search": (
         "gaode_mcp",
         "mcp_web_search",
-        "mcp_geocode",
     ),
     "fx": (
         "fetch_fx_rates",
@@ -251,12 +217,6 @@ def _build_travel(ctx: ToolContext) -> list[BaseTool]:
         route_service=ctx.route_service,
         weather_service=ctx.weather_service,
     )
-
-
-def _build_baidu_mcp(ctx: ToolContext) -> list[BaseTool]:
-    from backend.tools.baidu_mcp_tools import create_baidu_mcp_tools
-
-    return create_baidu_mcp_tools(ctx.baidu_mcp_caller)
 
 
 def _selection_cache(ctx: ToolContext) -> Any:
@@ -315,6 +275,8 @@ def _build_gaode_mcp(ctx: ToolContext) -> list[BaseTool]:
     return create_gaode_mcp_tools(
         caller=ctx.gaode_mcp_caller,
         settings=ctx.settings,
+        default_city=ctx.gaode_city,
+        compact_poi_results=ctx.gaode_compact_poi_results,
     )
 
 
@@ -332,7 +294,6 @@ def _build_flight_web(_ctx: ToolContext) -> list[BaseTool]:
 
 TOOL_GROUPS: dict[str, Callable[[ToolContext], list[BaseTool]]] = {
     "travel": _build_travel,
-    "baidu_mcp": _build_baidu_mcp,
     "bocha": _build_bocha,
     "web_place_extract": _build_web_place_extract,
     "rank_pool": _build_rank_pool,
@@ -361,8 +322,6 @@ def _enabled_for(spec: ToolSpec, ctx: ToolContext) -> bool:
         return bocha_ready
 
     if spec.enabled(settings):
-        return True
-    if spec.group == "baidu_mcp" and ctx.baidu_mcp_caller is not None:
         return True
     if spec.group == "bocha" and ctx.bocha_caller is not None:
         return True

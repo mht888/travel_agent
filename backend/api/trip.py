@@ -1,22 +1,17 @@
-"""旅行相关的 HTTP 接口。
-
-第 4 阶段新增 /trips/requirements；第 6 阶段新增 /trips/research；
-第 7 阶段新增 /trips/plan（生成每日行程）。
-"""
+"""旅行相关的 HTTP 接口。"""
 
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
-from backend.graph.workflow import run_research
+from backend.graph.itinerary_workflow import run_itinerary_workflow
 from backend.schemas.attraction import AttractionSearchResponse
 from backend.schemas.itinerary import Itinerary
 from backend.schemas.requirement import RequirementExtraction, RequirementExtractionRequest
 from backend.schemas.restaurant import RestaurantSearchResponse
 from backend.schemas.trip import TripRequirements
 from backend.services.attraction_service import AttractionService, get_attraction_service
-from backend.services.itinerary_service import ItineraryService, get_itinerary_service
 from backend.services.requirement_service import (
     RequirementService,
     get_requirement_service,
@@ -26,33 +21,12 @@ from backend.services.restaurant_service import RestaurantService, get_restauran
 router = APIRouter(prefix="/attractions", tags=["attractions"])
 restaurant_router = APIRouter(prefix="/restaurants", tags=["restaurants"])
 requirements_router = APIRouter(prefix="/trips", tags=["requirements"])
-research_router = APIRouter(prefix="/trips", tags=["research"])
 plan_router = APIRouter(prefix="/trips", tags=["planner"])
 
 
-class ResearchResponse(BaseModel):
-    """/trips/research 的响应。summary 是 Research Agent 输出的调研摘要。"""
-
-    summary: str = Field(..., description="Research Agent 输出的调研摘要")
-
-
-class ResearchFromTextResponse(BaseModel):
-    """/trips/research-from-text 的响应。
-
-    两种情况：
-    - 需求完整：ready=True，summary 有值，requirements 是结构化需求。
-    - 需求不完整：ready=False，summary 为 None，clarifying_questions 是要追问的问题。
-    """
-
-    ready: bool = Field(..., description="需求是否完整到可以开始调研")
-    requirements: TripRequirements | None = Field(
-        None, description="结构化后的旅行需求（ready=True 时才有值）"
-    )
-    summary: str | None = Field(None, description="调研摘要（ready=True 时才有值）")
-    clarifying_questions: list[str] = Field(
-        default_factory=list, description="需要追问用户的问题（ready=False 时）"
-    )
-    warnings: list[str] = Field(default_factory=list)
+class PlanFromTextResponse(BaseModel):
+    extraction: RequirementExtraction
+    itinerary: Itinerary | None = None
 
 
 @router.get(
@@ -61,7 +35,7 @@ class ResearchFromTextResponse(BaseModel):
     summary="按城市和兴趣搜索景点",
 )
 async def search_attractions(
-    city: Annotated[str, Query(min_length=1, description="城市英文名，如 Tokyo")],
+    city: Annotated[str, Query(min_length=1, description="城市中文名，如 成都、东京")],
     interests: Annotated[
         list[str] | None,
         Query(description="兴趣标签，可重复：?interests=food&interests=culture"),
@@ -90,7 +64,7 @@ async def search_attractions(
     summary="按城市和菜系搜索餐厅（不暴露给 LLM，只供行程/前端使用）",
 )
 async def search_restaurants(
-    city: Annotated[str, Query(min_length=1, description="城市英文名，如 Tokyo")],
+    city: Annotated[str, Query(min_length=1, description="城市中文名，如 成都、东京")],
     cuisines: Annotated[
         list[str] | None,
         Query(description="菜系过滤，可重复：?cuisines=ramen&cuisines=sushi"),
@@ -139,71 +113,6 @@ async def extract_requirements(
     )
 
 
-@research_router.post(
-    "/research",
-    response_model=ResearchResponse,
-    summary="运行 Research Agent：调用工具收集景点/路线/天气信息并输出调研摘要",
-)
-async def research_trip(requirements: TripRequirements) -> ResearchResponse:
-    """第 6 阶段验证接口。
-
-    传入结构化的旅行需求，Research Agent 会自主调用 search_attractions、
-    get_route_matrix、get_weather 等工具，收集信息后返回一段调研摘要。
-
-    使用方式（在 /docs 页面）：
-    1. 先调用 POST /trips/requirements 提取需求，拿到 draft。
-    2. 把 draft 的字段填到 TripRequirements 里（destination、duration_days 必填）。
-    3. 调用 POST /trips/research，等待 Agent 完成工具调用循环。
-
-    注意：这个接口会真实调用 LLM，需要 .env 里配置 OPENAI_API_KEY。
-    """
-    summary = await run_research(requirements)
-    return ResearchResponse(summary=summary)
-
-
-@research_router.post(
-    "/research-from-text",
-    response_model=ResearchFromTextResponse,
-    summary="一句话输入 → 需求提取 →（完整则）调研 → 返回摘要",
-)
-async def research_from_text(
-    payload: RequirementExtractionRequest,
-    service: RequirementService = Depends(get_requirement_service),
-) -> ResearchFromTextResponse:
-    """串联「需求提取」和「Research Agent」两个阶段。
-
-    流程：
-    1. 用 RequirementService 从自然语言提取需求草稿。
-    2. 如果草稿不完整（缺目的地或天数），直接返回追问，不调用 LLM 调研。
-    3. 如果草稿完整，转成 TripRequirements，调用 run_research 跑工具调用循环。
-
-    这样用户输入一句话就能拿到调研结果，不需要手动在两个接口之间复制字段。
-    （完整的多阶段 LangGraph 工作流留到第 11 阶段，这里只是顺序调用两个 Service。）
-    """
-    extraction = await service.extract(
-        message=payload.message,
-        previous_draft=payload.previous_draft,
-    )
-
-    # 需求不完整：返回追问，不浪费 LLM 调用
-    if not extraction.is_ready:
-        return ResearchFromTextResponse(
-            ready=False,
-            clarifying_questions=extraction.clarifying_questions,
-            warnings=extraction.warnings,
-        )
-
-    # 需求完整：跑 Research Agent
-    requirements = extraction.to_requirements()
-    summary = await run_research(requirements)
-    return ResearchFromTextResponse(
-        ready=True,
-        requirements=requirements,
-        summary=summary,
-        warnings=extraction.warnings,
-    )
-
-
 @plan_router.post(
     "/plan",
     response_model=Itinerary,
@@ -211,24 +120,22 @@ async def research_from_text(
 )
 async def plan_trip(
     requirements: TripRequirements,
-    service: ItineraryService = Depends(get_itinerary_service),
 ) -> Itinerary:
-    """第 7 阶段验证接口。
+    """使用景点初选和真实地图数据生成行程。"""
+    return await run_itinerary_workflow(requirements)
 
-    数据流：
-        需求 → 景点候选（AttractionService）
-             → 交通矩阵（RouteService）
-             → 天气（WeatherService，有 start_date 才查）
-             → LLM 排程（Planner Agent，失败降级规则）
-             → Python 时间轴组装（itinerary_builder）
-             → Itinerary
 
-    在 /docs 里的使用顺序：
-    1. POST /trips/requirements 拿到结构化草稿（可选，也可以手填）。
-    2. 把草稿字段填进这个接口的 body，destination 与 duration_days 必填。
-    3. 返回的 days[].items[] 就是带 start_time / end_time / 交通耗时的行程。
-
-    注意：配置了 OPENAI_API_KEY 且填写了 planner 的 TODO 后才会真正调用 LLM；
-    否则自动使用规则排程，结果里 warnings 会说明原因。
-    """
-    return await service.plan(requirements)
+@plan_router.post(
+    "/plan-from-text",
+    response_model=PlanFromTextResponse,
+    summary="从自然语言提取需求并生成行程",
+)
+async def plan_from_text(
+    payload: RequirementExtractionRequest,
+    service: RequirementService = Depends(get_requirement_service),
+) -> PlanFromTextResponse:
+    extraction = await service.extract(payload.message, previous_draft=payload.previous_draft)
+    if not extraction.is_ready:
+        return PlanFromTextResponse(extraction=extraction)
+    itinerary = await run_itinerary_workflow(extraction.to_requirements())
+    return PlanFromTextResponse(extraction=extraction, itinerary=itinerary)

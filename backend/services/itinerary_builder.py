@@ -21,7 +21,7 @@
 from collections.abc import Mapping, Sequence
 from datetime import date, time, timedelta
 
-from backend.schemas.attraction import Attraction
+from backend.schemas.attraction import Attraction, AttractionCategory
 from backend.schemas.common import DataStatus, Provenance
 from backend.schemas.itinerary import (
     Itinerary,
@@ -37,6 +37,8 @@ from backend.schemas.trip import TripRequirements
 
 DAY_START = time(9, 0)
 DAY_END = time(19, 0)
+EVENING_START = time(18, 0)
+EVENING_END = time(21, 0)
 FALLBACK_TRANSFER_MINUTES = 15
 LUNCH_START = time(12, 0)
 LUNCH_DURATION_MINUTES = 60
@@ -63,9 +65,10 @@ def _find_entry(
 
 
 def _make_lunch_item(
-    restaurant: Restaurant, *, seq: int, start_minutes: int, mode
+    restaurant: Restaurant, *, seq: int, start_minutes: int, mode,
+    transport: TransportLeg | None = None,
 ) -> ItineraryItem:
-    """构造午餐项。餐厅不在交通矩阵里，前后统一按估算步行时间处理。"""
+    """构造午餐项，优先使用已查到的路线。"""
     return ItineraryItem(
         seq=seq,
         type=ItineraryItemType.RESTAURANT,
@@ -74,7 +77,7 @@ def _make_lunch_item(
         start_time=_to_time(start_minutes),
         end_time=_to_time(start_minutes + LUNCH_DURATION_MINUTES),
         cost=restaurant.average_price,
-        transport_from_previous=TransportLeg(
+        transport_from_previous=transport or TransportLeg(
             mode=mode,
             duration_minutes=LUNCH_TRANSFER_MINUTES,
             distance_meters=None,
@@ -95,6 +98,8 @@ def build_day(
     day_date: date | None = None,
     theme: str | None = None,
     restaurant: Restaurant | None = None,
+    require_routes: bool = False,
+    evening_attraction_ids: Sequence[str] = (),
 ) -> tuple[ItineraryDay, list[str]]:
     """把一天内的景点 id 展开成带时间的行程项。返回 (ItineraryDay, warnings)。
 
@@ -142,6 +147,20 @@ def build_day(
     cursor = _to_minutes(DAY_START)
     previous_id: str | None = None
     lunch_pending = restaurant is not None
+    evening = set(evening_attraction_ids)
+    for attraction_id in attraction_ids:
+        attraction = attractions_by_id[attraction_id]
+        if (
+            attraction.category is AttractionCategory.NIGHTLIFE
+            or "夜市" in attraction.name
+            or (
+                attraction.category is AttractionCategory.FOOD
+                and attraction.name.endswith(("美食街", "小吃街"))
+            )
+        ):
+            evening.add(attraction_id)
+    attraction_ids = sorted(attraction_ids, key=lambda attraction_id: attraction_id in evening)
+    finish_limit = DAY_END
 
     for index, attraction_id in enumerate(attraction_ids):
         attraction = attractions_by_id[attraction_id]
@@ -151,6 +170,12 @@ def build_day(
         if previous_id is not None:
             entry = _find_entry(matrix, previous_id, attraction_id)
             if entry is None:
+                if require_routes:
+                    warnings.append(
+                        f"第 {day_index} 天缺少 {previous_id} → {attraction_id} 的实际路线，"
+                        f"剩余 {len(attraction_ids) - index} 个景点未排入时间轴"
+                    )
+                    break
                 # 稀疏矩阵里缺边是正常情况：用固定值估算，但必须留痕
                 transfer = FALLBACK_TRANSFER_MINUTES
                 provenance = Provenance(
@@ -175,7 +200,31 @@ def build_day(
             )
 
         start = cursor + transfer
+        is_evening = attraction_id in evening
+        deadline = EVENING_END if is_evening else DAY_END
+        if is_evening:
+            start = max(start, _to_minutes(EVENING_START))
+            if day_date and attraction.opening_hours:
+                starts = [
+                    max(start, _to_minutes(interval.opens_at))
+                    for interval in attraction.opening_hours
+                    if interval.weekday == day_date.weekday()
+                    and max(start, _to_minutes(interval.opens_at))
+                    + attraction.estimated_duration_minutes <= _to_minutes(interval.closes_at)
+                ]
+                if not starts:
+                    warnings.append(f"第 {day_index} 天「{attraction.name}」无合适的晚间营业时段，已跳过")
+                    continue
+                start = min(starts)
         end = start + attraction.estimated_duration_minutes
+
+        if (require_routes or is_evening) and end > _to_minutes(deadline):
+            warnings.append(
+                f"第 {day_index} 天去「{attraction.name}」需 {transfer} 分钟交通，"
+                f"预计游览结束超过 {deadline:%H:%M}，"
+                f"剩余 {len(attraction_ids) - index} 个景点未安排"
+            )
+            break
 
         # 超过 24 点会被 _to_time 绕回 0 点，从而产生 end < start 的非法项；
         # 与其伪造，不如截断当天并明确告知用户
@@ -200,6 +249,7 @@ def build_day(
         )
         cursor = end
         previous_id = attraction_id
+        finish_limit = deadline
 
         # 第一处「结束时间跨过 12:00」的景点之后安排午餐。
         # 午餐后再去下一个景点，交通仍然取矩阵里的景点间耗时（见模块 docstring 的已知简化）。
@@ -240,10 +290,10 @@ def build_day(
                 f"第 {day_index} 天行程较满，未安排餐厅「{restaurant.name}」"
             )
 
-    if cursor > _to_minutes(DAY_END):
+    if cursor > _to_minutes(finish_limit):
         warnings.append(
             f"第 {day_index} 天行程结束于 {_to_time(cursor):%H:%M}，"
-            f"超过 {DAY_END:%H:%M}"
+            f"超过 {finish_limit:%H:%M}"
         )
 
     return (
@@ -263,6 +313,8 @@ def build_itinerary(
     candidates: Sequence[Attraction],
     matrix: RouteMatrix,
     restaurants: Sequence[Restaurant] = (),
+    *,
+    require_routes: bool = False,
 ) -> Itinerary:
     """把草稿落到 Itinerary：过滤掉候选集之外的 id，保持 LLM 给的顺序。
 
@@ -303,6 +355,8 @@ def build_itinerary(
             day_date=day_date,
             theme=day_plan.theme,
             restaurant=restaurant,
+            require_routes=require_routes,
+            evening_attraction_ids=day_plan.evening_attraction_ids,
         )
         days.append(day)
         warnings.extend(day_warnings)

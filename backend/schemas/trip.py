@@ -5,6 +5,7 @@ from enum import Enum
 
 from pydantic import BaseModel, Field, field_validator
 
+from backend.schemas.city import require_chinese_city_name
 from backend.schemas.common import Money
 
 
@@ -22,7 +23,7 @@ class TripRequirements(BaseModel):
     注意它同时是「多轮修改」的载体：用户说“预算改成 1500”，改的就是这里的字段。
     """
 
-    destination: str = Field(..., min_length=1, description="城市名，如 Tokyo")
+    destination: str = Field(..., min_length=1, description="城市中文名，如 成都、东京")
     duration_days: int = Field(..., ge=1, le=30)
     start_date: date | None = Field(None, description="未知时允许为空，由前端补")
     travelers: int = Field(1, ge=1, le=20)
@@ -36,10 +37,7 @@ class TripRequirements(BaseModel):
     @field_validator("destination")
     @classmethod
     def _normalize_destination(cls, value: str) -> str:
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError("destination 不能为空白")
-        return normalized
+        return require_chinese_city_name(value)
 
     @field_validator("interests")
     @classmethod

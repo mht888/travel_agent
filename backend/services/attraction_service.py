@@ -12,6 +12,7 @@ from functools import lru_cache
 from backend.providers.base import AttractionProvider
 from backend.providers.mock_provider import MockAttractionProvider
 from backend.schemas.attraction import Attraction, AttractionSearchResponse
+from backend.schemas.city import canonical_city_name
 
 
 class AttractionService:
@@ -34,7 +35,7 @@ class AttractionService:
 
         排序优先级：兴趣命中数 → 评分 → id（最后一级保证结果稳定、可断言）。
         """
-        normalized_city = city.strip()
+        normalized_city = canonical_city_name(city)
         normalized_interests = self._normalize_interests(interests)
 
         # 多取一些候选，避免 Provider 的兜底排序把低评分但高匹配的条目截掉

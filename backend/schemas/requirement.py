@@ -18,6 +18,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, computed_field, field_validator
 
 from backend.schemas.common import ALLOWED_CURRENCIES, Money
+from backend.schemas.city import require_chinese_city_name
 from backend.schemas.trip import TravelStyle, TripRequirements
 
 
@@ -47,10 +48,7 @@ class TripRequirementDraft(BaseModel):
     def _normalize_destination(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError("destination 不能为空白，缺失请传 None")
-        return normalized
+        return require_chinese_city_name(value)
 
     @field_validator("interests")
     @classmethod
@@ -136,10 +134,7 @@ class RequirementPatch(BaseModel):
     def _normalize_destination(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError("destination 不能为空白，缺失请传 None")
-        return normalized
+        return require_chinese_city_name(value)
 
     @field_validator("budget_currency")
     @classmethod

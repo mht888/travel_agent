@@ -17,7 +17,7 @@
 import json
 import logging
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
@@ -46,9 +46,7 @@ _HOTEL_ACTION = "around_search"
 _HOTEL_POI_KIND = "hotel"
 _HOTEL_TOOL_NAMES = (
     "gaode_mcp",
-    "mcp_geocode",
     "mcp_web_search",
-    "mcp_route_matrix",
 )
 _DEFAULT_RADIUS = 2000
 _MAX_DESCRIPTION_CHARS = 80
@@ -146,7 +144,7 @@ def _tool_payloads(
     for message in messages:
         if not isinstance(message, ToolMessage) or message.name != tool_name:
             continue
-        payload = _coerce_payload(message.content)
+        payload = _coerce_payload(message.artifact) or _coerce_payload(message.content)
         if payload is None or not payload.get("ok"):
             continue
         if action is not None and payload.get("action") != action:
@@ -282,7 +280,11 @@ async def run_hotel_search(
 
     if tools is None:
         try:
-            tools = build_tools(_HOTEL_TOOL_NAMES, tool_context or ToolContext())
+            context = replace(
+                tool_context or ToolContext(),
+                gaode_city=normalized_city, gaode_compact_poi_results=True,
+            )
+            tools = build_tools(_HOTEL_TOOL_NAMES, context)
         except ValueError as exc:
             logger.warning("酒店工具不可用：%s", exc)
             tools = []

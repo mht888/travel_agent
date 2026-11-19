@@ -31,7 +31,7 @@ class DailyWeather(BaseModel):
     condition: WeatherCondition
     temp_min_c: float
     temp_max_c: float
-    precipitation_probability: int = Field(..., ge=0, le=100)
+    precipitation_probability: int | None = Field(None, ge=0, le=100)
     provenance: Provenance
 
     @model_validator(mode="after")

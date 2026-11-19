@@ -18,18 +18,21 @@
 import dataclasses
 import logging
 import re
-from collections.abc import Sequence
+from collections.abc import Awaitable, Sequence
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Literal, Protocol, get_args, get_origin
+from uuid import uuid4
 
 from pydantic import BaseModel, Field, ValidationError
 
 from backend.schemas.attraction import AttractionCategory
+from backend.schemas.city import CITY_ALIASES, require_chinese_city_name
 from backend.schemas.common import ALLOWED_CURRENCIES
 from backend.schemas.requirement import RequirementPatch, TripRequirementDraft
 from backend.schemas.trip import TravelStyle
+from backend.services.usage import active_usage
 
 logger = logging.getLogger(__name__)
 
@@ -102,14 +105,6 @@ def _normalize_style(value: str | None) -> TravelStyle | None:
         return None
 
 
-def _normalize_destination(value: str | None) -> str | None:
-    """城市名只做去空白；提示词已要求 LLM 输出英文名。"""
-    if value is None:
-        return None
-    cleaned = value.strip()
-    return cleaned or None
-
-
 # ---------------------------- 提示词字段说明（由 schema 生成） ----------------------------
 # 提示词里的「字段 + 可填值」直接从 schema 取值：
 #   字段名与顺序 → _LLMExtraction 的字段定义
@@ -167,7 +162,8 @@ class _LLMExtraction(BaseModel):
 
     destination: str | None = Field(
         None,
-        description="城市名，用英文名（如 Tokyo、Osaka、Kyoto）。只提到国家、没说城市时输出 null。",
+        description="输出城市的通用中文名（如 成都、东京、大阪）。英文输入也转成中文名。"
+        "只提到国家、没说城市，或无法确认中文名时输出 null。",
     )
     duration_days: int | None = Field(
         None,
@@ -310,7 +306,10 @@ def _to_patch(raw: _LLMExtraction) -> tuple[RequirementPatch, list[str]]:
     data: dict[str, Any] = {}
 
     if raw.destination and raw.destination.strip():
-        data["destination"] = _normalize_destination(raw.destination)
+        try:
+            data["destination"] = require_chinese_city_name(raw.destination)
+        except ValueError:
+            warnings.append("未能确认目的地的中文名称，请补充中文城市名")
 
     if raw.duration_days is not None:
         if 1 <= raw.duration_days <= 30:
@@ -465,14 +464,36 @@ class RequirementAgent:
         patch, warnings = _to_patch(raw)
         return ExtractionOutcome(patch=patch, warnings=warnings, source="llm")
 
+    async def _measure_completion(self, request: Awaitable[Any]) -> Any:
+        collector = active_usage.get()
+        if collector is None:
+            return await request
+        started_at = datetime.now(timezone.utc)
+        completion = None
+        try:
+            completion = await request
+            return completion
+        except Exception as exc:
+            completion = getattr(exc, "completion", None)
+            raise
+        finally:
+            usage = getattr(completion, "usage", None)
+            collector.record(
+                call_id=f"requirement:{uuid4().hex}",
+                stage="Requirement",
+                model=getattr(completion, "model", None) or self._model,
+                started_at=started_at,
+                usage=usage.model_dump() if usage is not None else None,
+            )
+
     async def _structured_output(self, messages: list[dict[str, str]]) -> _LLMExtraction:
         """OpenAI 严格结构化输出：服务端按 Pydantic 生成的 JSON Schema 约束。"""
-        completion = await self._client.chat.completions.parse(
+        completion = await self._measure_completion(self._client.chat.completions.parse(
             model=self._model,
             messages=messages,
             response_format=_LLMExtraction,
             temperature=0,
-        )
+        ))
         reply = completion.choices[0].message
         if getattr(reply, "refusal", None):
             raise ValueError(f"模型拒绝回答：{reply.refusal}")
@@ -487,12 +508,12 @@ class RequirementAgent:
         json_object 模式不保证 schema，所以这里必须再走一遍 Pydantic 校验；
         校验失败会抛异常，由调用方降级到规则解析。
         """
-        completion = await self._client.chat.completions.create(
+        completion = await self._measure_completion(self._client.chat.completions.create(
             model=self._model,
             messages=messages,
             response_format={"type": "json_object"},
             temperature=0,
-        )
+        ))
         content = getattr(completion.choices[0].message, "content", None)
         if not content or not content.strip():
             raise ValueError("模型没有返回内容")
@@ -563,24 +584,7 @@ _RULE_INTEREST_KEYWORDS: dict[str, str] = {
 }
 
 _RULE_CITY_ALIASES: dict[str, str] = {
-    "东京": "Tokyo",
-    "tokyo": "Tokyo",
-    "大阪": "Osaka",
-    "osaka": "Osaka",
-    "京都": "Kyoto",
-    "kyoto": "Kyoto",
-    "首尔": "Seoul",
-    "seoul": "Seoul",
-    "曼谷": "Bangkok",
-    "bangkok": "Bangkok",
-    "新加坡": "Singapore",
-    "singapore": "Singapore",
-    "巴黎": "Paris",
-    "paris": "Paris",
-    "伦敦": "London",
-    "london": "London",
-    "纽约": "New York",
-    "new york": "New York",
+    **CITY_ALIASES, **{name: name for name in CITY_ALIASES.values()},
 }
 
 
@@ -726,7 +730,11 @@ class RuleBasedRequirementExtractor:
     def _extract_destination(lowered: str) -> str | None:
         best: tuple[int, str] | None = None
         for alias, city in _RULE_CITY_ALIASES.items():
-            index = lowered.find(alias)
+            if alias.isascii():
+                match = re.search(rf"(?<![a-z]){re.escape(alias)}(?![a-z])", lowered)
+                index = match.start() if match else -1
+            else:
+                index = lowered.find(alias)
             if index >= 0 and (best is None or index < best[0]):
                 best = (index, city)
         return best[1] if best else None

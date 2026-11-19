@@ -12,6 +12,7 @@
 from collections.abc import Sequence
 
 from backend.providers.base import RestaurantProvider
+from backend.schemas.city import canonical_city_name
 from backend.schemas.restaurant import RestaurantSearchResponse
 
 MAX_LIMIT = 30
@@ -44,7 +45,7 @@ class RestaurantService:
         异常：
             ValueError: 参数不合法（这是调用方 bug，不应该静默返回空）
         """
-        city_key = city.strip()
+        city_key = canonical_city_name(city)
         if not city_key:
             raise ValueError("city 不能为空")
         if limit < 1 or limit > MAX_LIMIT:

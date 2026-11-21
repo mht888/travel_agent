@@ -8,7 +8,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -52,6 +52,12 @@ class Settings(BaseSettings):
     bocha_mcp_timeout_seconds: float = Field(20.0, gt=0)
     # 一次 run 里 Agent 可能并行搜多个关键词，按 0.036 元/次控制并发
     bocha_mcp_max_concurrency: int = Field(3, ge=1, le=10)
+    tavily_apikey: str | None = Field(
+        None, validation_alias=AliasChoices("tavily_apikey", "TAVILY_API_KEY")
+    )
+    metaso_apikey: str | None = Field(
+        None, validation_alias=AliasChoices("metaso_apikey", "METASO_API_KEY", "mesota_api")
+    )
 
     # --- 高德地图 MCP Server（酒店/餐厅 POI 及全部高德能力）---
     # 未配置 GAODE_MAPS_AK 时不会注册 gaode_mcp，见 tools/gaode_mcp_tools.py

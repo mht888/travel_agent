@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field, model_validator
 from backend.schemas.budget import BudgetBreakdown
 from backend.schemas.common import DataStatus, Money, Provenance, TransportMode
 from backend.schemas.hotel import Hotel
+from backend.schemas.ticket import AttractionTicket
 from backend.schemas.trip import TripRequirements
 
 
@@ -64,6 +65,7 @@ class ItineraryItem(BaseModel):
     start_time: time
     end_time: time
     cost: Money | None = None
+    ticket: AttractionTicket | None = None
     transport_from_previous: TransportLeg | None = Field(
         None, description="第一项为 None"
     )

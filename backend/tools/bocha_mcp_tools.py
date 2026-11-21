@@ -89,11 +89,13 @@ class BochaMcpClient:
         timeout: float = 20.0,
         startup_timeout: float = 20.0,
         max_concurrency: int = 3,
+        trust_env: bool = True,
     ) -> None:
         self._api_key = api_key.strip()
         self._url = url.strip() or _DEFAULT_URL
         self._timeout = timeout
         self._startup_timeout = startup_timeout
+        self._trust_env = trust_env
         self._semaphore = asyncio.Semaphore(max_concurrency)
 
         self._session: Any = None
@@ -123,7 +125,9 @@ class BochaMcpClient:
                 "Accept": "application/json, text/event-stream",
             }
             # read 超时留大：SSE 长连接可能被服务端持有较久
-            async with httpx2.AsyncClient(headers=headers, timeout=60.0) as http_client:
+            async with httpx2.AsyncClient(
+                headers=headers, timeout=60.0, trust_env=self._trust_env
+            ) as http_client:
                 async with streamable_http_client(
                     self._url, http_client=http_client
                 ) as streams:

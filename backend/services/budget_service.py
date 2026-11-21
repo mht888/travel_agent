@@ -127,7 +127,11 @@ def _typed_item_cost_usd(
                 unknown += 1
                 continue
             counted += 1
-            quantity = itinerary.trip.travelers if item.meal in _MEAL_BUDGET_SHARE else 1
+            has_adult_ticket = (
+                item_type is ItineraryItemType.ATTRACTION and item.ticket is not None
+                and item.ticket.adult_price is not None
+            )
+            quantity = itinerary.trip.travelers if has_adult_ticket or item.meal in _MEAL_BUDGET_SHARE else 1
             per_currency[item.cost.currency] = (
                 per_currency.get(item.cost.currency, _ZERO) + item.cost.amount * quantity
             )
@@ -362,7 +366,7 @@ class BudgetService:
                 (
                     f"门票原始价 {'、'.join(ticket_parts)}"
                     if ticket_parts
-                    else "行程中没有收费景点"
+                    else "未取得可计入预算的门票价格" if unknown_tickets else "行程中没有收费景点"
                 ),
             ),
             self._line(

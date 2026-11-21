@@ -9,6 +9,7 @@ from uuid import uuid4
 from langgraph.graph import END, START, StateGraph
 from pydantic_core import to_json
 
+from backend.agents.attraction_ticket_agent import enrich_itinerary_tickets
 from backend.agents.planner_agent import (
     DAILY_LIMITS,
     LlmItineraryPlanner,
@@ -221,6 +222,10 @@ def build_itinerary_workflow(data: GaodeTripData):
                 itinerary, candidates, candidates_for_meals, data
             )
             itinerary.warnings[:0] = [*warnings, *outcome.warnings]
+            _, ticket_warnings = await _optional(
+                "景点门票查询", enrich_itinerary_tickets(itinerary, candidates)
+            )
+            itinerary.warnings.extend(ticket_warnings)
             try:
                 budget = BudgetService().estimate(trip, itinerary)
             except FXRateUnavailableError as exc:
